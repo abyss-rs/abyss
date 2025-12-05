@@ -1,0 +1,855 @@
+use anyhow::Result;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+
+use crate::app::{App, AppMode};
+
+pub async fn handle_events(app: &mut App) -> Result<()> {
+    if event::poll(std::time::Duration::from_millis(100))? {
+        if let Event::Key(key) = event::read()? {
+            match app.mode {
+                AppMode::Normal => handle_normal_mode(app, key).await?,
+                AppMode::SelectStorage => handle_storage_select(app, key).await?,
+                AppMode::SelectNamespace => handle_namespace_select(app, key).await?,
+                AppMode::SelectPvc => handle_pvc_select(app, key).await?,
+                AppMode::SelectPv => handle_pv_select(app, key).await?,
+                AppMode::DiskAnalyzer => handle_disk_analyzer(app, key).await?,
+                AppMode::ConfirmDelete => handle_confirm_delete(app, key).await?,
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.should_quit = true;
+        }
+        KeyCode::F(10) => {
+            app.should_quit = true;
+        }
+        KeyCode::Tab => {
+            app.switch_pane();
+        }
+        KeyCode::Up => {
+            app.active_pane_mut().select_previous();
+        }
+        KeyCode::Down => {
+            app.active_pane_mut().select_next();
+        }
+        KeyCode::Enter => {
+            app.navigate_into().await?;
+        }
+        KeyCode::Backspace => {
+            app.navigate_up().await?;
+        }
+        KeyCode::F(5) => {
+            // Copy operation
+            handle_copy(app).await?;
+        }
+        KeyCode::F(2) => {
+            // Show disk usage for current PVC
+            handle_disk_usage(app).await?;
+        }
+        KeyCode::F(3) => {
+            // ncdu-like disk analyzer
+            handle_disk_analyzer_enter(app).await?;
+        }
+        KeyCode::F(7) => {
+            // Create directory
+            app.message = "F7: Create directory - Not yet implemented".to_string();
+        }
+        KeyCode::F(8) => {
+            // Delete
+            handle_delete(app).await?;
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Select storage type (PV or PVC)
+            app.mode = AppMode::SelectStorage;
+
+            // Display storage options in right pane
+            app.right_pane.entries = vec![
+                crate::fs::types::FileEntry {
+                    name: "PersistentVolumes (PV) - Direct access".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+                crate::fs::types::FileEntry {
+                    name: "PersistentVolumeClaims (PVC) - Namespace scoped".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+            ];
+
+            // Reset selection
+            app.right_pane.state.select(Some(0));
+
+            app.message =
+                "Select storage type (↑/↓ to navigate, Enter to select, Esc to cancel)".to_string();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn handle_storage_select(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::Normal;
+            app.message = "Cancelled".to_string();
+        }
+        KeyCode::Up => {
+            app.right_pane.select_previous();
+        }
+        KeyCode::Down => {
+            app.right_pane.select_next();
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = app.right_pane.selected_entry() {
+                if entry.name.starts_with("PersistentVolumes") {
+                    // Direct PV access
+                    app.mode = AppMode::SelectPv;
+                    app.message = "Loading PVs...".to_string();
+
+                    let pvs = app.storage_manager.list_all_storage().await?;
+
+                    app.right_pane.entries = pvs
+                        .iter()
+                        .map(|pv| crate::fs::types::FileEntry {
+                            name: format!(
+                                "{} ({}) - {}",
+                                pv.name,
+                                pv.capacity,
+                                pv.claim_ref.as_deref().unwrap_or("Available")
+                            ),
+                            size: 0,
+                            is_dir: true,
+                            modified: None,
+                            permissions: None,
+                        })
+                        .collect();
+
+                    if !app.right_pane.entries.is_empty() {
+                        app.right_pane.state.select(Some(0));
+                        app.message = "Select PV (↑/↓ to navigate, Enter to select, Esc to cancel)"
+                            .to_string();
+                    } else {
+                        app.message = "No PVs found in cluster".to_string();
+                        app.mode = AppMode::Normal;
+                    }
+                } else {
+                    // PVC access - show namespace selection
+                    app.mode = AppMode::SelectNamespace;
+                    app.namespaces = app.storage_manager.get_namespaces().await?;
+
+                    // Display namespaces in right pane
+                    app.right_pane.entries = app
+                        .namespaces
+                        .iter()
+                        .map(|ns| crate::fs::types::FileEntry {
+                            name: ns.clone(),
+                            size: 0,
+                            is_dir: true,
+                            modified: None,
+                            permissions: None,
+                        })
+                        .collect();
+
+                    // Reset selection
+                    if !app.right_pane.entries.is_empty() {
+                        app.right_pane.state.select(Some(0));
+                    }
+
+                    app.message =
+                        "Select namespace (↑/↓ to navigate, Enter to select, Esc to cancel)"
+                            .to_string();
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn handle_namespace_select(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::Normal;
+            app.message = "Cancelled".to_string();
+        }
+        KeyCode::Up => {
+            app.right_pane.select_previous();
+        }
+        KeyCode::Down => {
+            app.right_pane.select_next();
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = app.right_pane.selected_entry() {
+                let selected_namespace = entry.name.clone();
+
+                // Update current namespace
+                app.current_namespace = selected_namespace.clone();
+
+                // Move to PVC selection
+                app.mode = AppMode::SelectPvc;
+                app.message =
+                    "Select PVC (↑/↓ to navigate, Enter to select, Esc to cancel)".to_string();
+
+                // Load PVCs for selected namespace
+                let pvcs = app.storage_manager.list_pvcs(&selected_namespace).await?;
+
+                // Convert PVCs to file entries for display
+                app.right_pane.entries = pvcs
+                    .iter()
+                    .map(|pvc| crate::fs::types::FileEntry {
+                        name: format!("{} ({})", pvc.name, pvc.capacity),
+                        size: 0,
+                        is_dir: true,
+                        modified: None,
+                        permissions: None,
+                    })
+                    .collect();
+
+                // Reset selection
+                if !app.right_pane.entries.is_empty() {
+                    app.right_pane.state.select(Some(0));
+                } else {
+                    app.message = format!("No PVCs found in namespace '{}'", selected_namespace);
+                    app.mode = AppMode::Normal;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn handle_pvc_select(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::Normal;
+            app.message = "Cancelled".to_string();
+        }
+        KeyCode::Up => {
+            app.right_pane.select_previous();
+        }
+        KeyCode::Down => {
+            app.right_pane.select_next();
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = app.right_pane.selected_entry() {
+                // Extract PVC name (remove capacity info)
+                let pvc_name = entry
+                    .name
+                    .split(" (")
+                    .next()
+                    .unwrap_or(&entry.name)
+                    .to_string();
+                let namespace = app.current_namespace.clone();
+
+                // Set right pane to browse this PVC
+                app.right_pane.path = format!("{}/{}/data", namespace, pvc_name);
+
+                // Load files from PVC
+                app.refresh_right_pane(&namespace, &pvc_name, "/data")
+                    .await?;
+
+                app.mode = AppMode::Normal;
+                app.message = format!("Connected to PVC: {}", pvc_name);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn handle_pv_select(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::Normal;
+            app.message = "Cancelled".to_string();
+        }
+        KeyCode::Up => {
+            app.right_pane.select_previous();
+        }
+        KeyCode::Down => {
+            app.right_pane.select_next();
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = app.right_pane.selected_entry() {
+                // Extract PV name (before first space)
+                let pv_name = entry
+                    .name
+                    .split(' ')
+                    .next()
+                    .unwrap_or(&entry.name)
+                    .to_string();
+
+                // For PV access, we need to create a pod that mounts the PV directly
+                // This is more complex as PVs don't have a namespace
+                // For now, we'll use a default namespace
+                let namespace = "default";
+
+                // Set right pane to browse this PV
+                app.right_pane.path = format!("pv/{}/data", pv_name);
+
+                // Load files from PV
+                // Note: This uses the same mechanism as PVC but references the PV name
+                app.refresh_right_pane(namespace, &pv_name, "/data").await?;
+
+                app.mode = AppMode::Normal;
+                app.message = format!("Connected to PV: {}", pv_name);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn count_files_in_dir(path: &std::path::Path) -> usize {
+    if path.is_file() {
+        return 1;
+    }
+
+    // Use jwalk for fast parallel directory walking
+    jwalk::WalkDir::new(path)
+        .skip_hidden(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .count()
+        .max(1) // At least 1 for the directory itself
+}
+
+async fn handle_copy(app: &mut App) -> Result<()> {
+    use crate::app::ActivePane;
+    use std::path::PathBuf;
+
+    // Don't start new copy if one is already running
+    if app.background_task.is_some() {
+        app.message = "Copy already in progress...".to_string();
+        return Ok(());
+    }
+
+    let source_entry = match app.active_pane {
+        ActivePane::Left => app.left_pane.selected_entry(),
+        ActivePane::Right => app.right_pane.selected_entry(),
+    };
+
+    if let Some(entry) = source_entry {
+        let entry_name = entry.name.clone();
+        let entry_size = entry.size;
+        let entry_is_dir = entry.is_dir;
+
+        match app.active_pane {
+            ActivePane::Left => {
+                // Copy from local to remote
+                if app.right_pane.path.is_empty() {
+                    app.message =
+                        "Right pane: No PVC selected. Press Ctrl+N to select.".to_string();
+                    return Ok(());
+                }
+
+                let source_path = PathBuf::from(&app.left_pane.path).join(&entry_name);
+
+                // Parse namespace/pvc/path from right pane path
+                let path_clone = app.right_pane.path.clone();
+                let parts: Vec<&str> = path_clone.split('/').collect();
+                if parts.len() >= 2 {
+                    let namespace = parts[0].to_string();
+                    let pvc = parts[1].to_string();
+
+                    // Get current remote directory
+                    let current_remote_dir = if parts.len() > 2 {
+                        format!("/{}", parts[2..].join("/"))
+                    } else {
+                        "/data".to_string()
+                    };
+
+                    // Destination is current directory + filename
+                    let remote_path = format!("{}/{}", current_remote_dir, entry_name);
+
+                    // Stage 1: Counting files (synchronous, fast with jwalk)
+                    app.progress = Some(crate::app::Progress {
+                        stage: crate::app::ProgressStage::Counting,
+                        current: 0,
+                        total: entry_size,
+                        current_file: entry_name.clone(),
+                        files_done: 0,
+                        total_files: 0,
+                    });
+
+                    let file_count = if entry_is_dir {
+                        count_files_in_dir(&source_path)
+                    } else {
+                        1
+                    };
+
+                    // Stage 2: Transferring - spawn background task
+                    app.progress = Some(crate::app::Progress {
+                        stage: crate::app::ProgressStage::Transferring,
+                        current: 0,
+                        total: entry_size,
+                        current_file: entry_name.clone(),
+                        files_done: 0,
+                        total_files: file_count,
+                    });
+                    app.message = format!("📤 Copying {} ({} files)...", entry_name, file_count);
+
+                    // Clone what we need for the spawned task
+                    let remote_fs = app.remote_fs.clone();
+                    let entry_name_clone = entry_name.clone();
+
+                    // Spawn the copy as a background task
+                    let handle = tokio::spawn(async move {
+                        remote_fs
+                            .copy_to_remote(&namespace, &pvc, &source_path, &remote_path)
+                            .await?;
+                        Ok(format!(
+                            "✓ Successfully copied {} to remote",
+                            entry_name_clone
+                        ))
+                    });
+
+                    app.background_task = Some(handle);
+                    // Return immediately - UI will now redraw with progress bar
+                    return Ok(());
+                }
+            }
+            ActivePane::Right => {
+                // Copy from remote to local
+                let dest_path = PathBuf::from(&app.left_pane.path).join(&entry_name);
+
+                // Parse namespace/pvc/path from right pane path
+                let path_clone = app.right_pane.path.clone();
+                let parts: Vec<&str> = path_clone.split('/').collect();
+                if parts.len() >= 2 {
+                    let namespace = parts[0].to_string();
+                    let pvc = parts[1].to_string();
+
+                    // Get current remote directory
+                    let current_remote_dir = if parts.len() > 2 {
+                        format!("/{}", parts[2..].join("/"))
+                    } else {
+                        "/data".to_string()
+                    };
+
+                    // Source is current directory + filename
+                    let remote_path = format!("{}/{}", current_remote_dir, entry_name);
+
+                    // Set up progress indicator - Stage: Transferring
+                    app.progress = Some(crate::app::Progress {
+                        stage: crate::app::ProgressStage::Transferring,
+                        current: 0,
+                        total: entry_size,
+                        current_file: entry_name.clone(),
+                        files_done: 0,
+                        total_files: if entry_is_dir { 0 } else { 1 },
+                    });
+                    app.message = format!("📥 Downloading {}...", entry_name);
+
+                    // Clone what we need for the spawned task
+                    let remote_fs = app.remote_fs.clone();
+                    let entry_name_clone = entry_name.clone();
+
+                    // Spawn the copy as a background task
+                    let handle = tokio::spawn(async move {
+                        remote_fs
+                            .copy_from_remote(&namespace, &pvc, &remote_path, &dest_path)
+                            .await?;
+                        Ok(format!(
+                            "✓ Successfully copied {} from remote",
+                            entry_name_clone
+                        ))
+                    });
+
+                    app.background_task = Some(handle);
+                    // Return immediately - UI will now redraw with progress bar
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Show delete confirmation popup - sets up the target and switches mode
+async fn handle_delete(app: &mut App) -> Result<()> {
+    use crate::app::{ActivePane, DeleteTarget};
+    use std::path::PathBuf;
+
+    let entry = match app.active_pane {
+        ActivePane::Left => app.left_pane.selected_entry(),
+        ActivePane::Right => app.right_pane.selected_entry(),
+    };
+
+    if let Some(entry) = entry {
+        let entry_name = entry.name.clone();
+        let is_dir = entry.is_dir;
+
+        match app.active_pane {
+            ActivePane::Left => {
+                let path = PathBuf::from(&app.left_pane.path).join(&entry_name);
+                let full_path = path.to_string_lossy().to_string();
+
+                app.delete_target = Some(DeleteTarget {
+                    full_path: full_path.clone(),
+                    display_path: full_path,
+                    is_local: true,
+                    is_dir,
+                    namespace: None,
+                    pvc: None,
+                });
+                app.mode = AppMode::ConfirmDelete;
+                app.message = "Press Y to confirm delete, N or Esc to cancel".to_string();
+            }
+            ActivePane::Right => {
+                // Parse namespace/pvc from right pane path
+                let path_clone = app.right_pane.path.clone();
+                let parts: Vec<&str> = path_clone.split('/').collect();
+                if parts.len() >= 2 {
+                    let namespace = parts[0].to_string();
+                    let pvc = parts[1].to_string();
+
+                    // Get current remote dir
+                    let current_dir = if parts.len() > 2 {
+                        format!("/{}", parts[2..].join("/"))
+                    } else {
+                        "/data".to_string()
+                    };
+                    let remote_path = format!("{}/{}", current_dir, entry_name);
+                    let display = format!("{}:{}{}", pvc, current_dir, entry_name);
+
+                    app.delete_target = Some(DeleteTarget {
+                        full_path: remote_path,
+                        display_path: display,
+                        is_local: false,
+                        is_dir,
+                        namespace: Some(namespace),
+                        pvc: Some(pvc),
+                    });
+                    app.mode = AppMode::ConfirmDelete;
+                    app.message = "Press Y to confirm delete, N or Esc to cancel".to_string();
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle confirmation dialog for delete
+async fn handle_confirm_delete(app: &mut App, key: KeyEvent) -> Result<()> {
+    use crate::fs::LocalFs;
+    use std::path::PathBuf;
+
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            // User confirmed delete
+            if let Some(ref target) = app.delete_target.clone() {
+                if target.is_local {
+                    // Delete local file/dir
+                    let path = PathBuf::from(&target.full_path);
+                    match LocalFs::delete(&path) {
+                        Ok(_) => {
+                            app.message = format!("✓ Deleted {}", target.display_path);
+                            app.refresh_left_pane().await?;
+                        }
+                        Err(e) => {
+                            app.message = format!("✗ Error deleting: {}", e);
+                        }
+                    }
+                } else {
+                    // Delete remote file/dir
+                    if let (Some(ns), Some(pvc)) = (&target.namespace, &target.pvc) {
+                        match app.remote_fs.delete(ns, pvc, &target.full_path).await {
+                            Ok(_) => {
+                                app.message = format!("✓ Deleted {}", target.display_path);
+                                // Refresh right pane
+                                let dir = std::path::Path::new(&target.full_path)
+                                    .parent()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "/data".to_string());
+                                app.refresh_right_pane(ns, pvc, &dir).await?;
+                            }
+                            Err(e) => {
+                                app.message = format!("✗ Error deleting: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            app.delete_target = None;
+            app.mode = AppMode::Normal;
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            // User cancelled
+            app.message = "Delete cancelled".to_string();
+            app.delete_target = None;
+            app.mode = AppMode::Normal;
+        }
+        _ => {
+            // Ignore other keys, remind user
+            app.message = "Press Y to confirm delete, N or Esc to cancel".to_string();
+        }
+    }
+
+    Ok(())
+}
+
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1}G", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1}M", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1}K", bytes as f64 / KB as f64)
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
+async fn handle_disk_usage(app: &mut App) -> Result<()> {
+    use crate::app::ActivePane;
+
+    if app.active_pane != ActivePane::Right {
+        app.message = "F2: Switch to right pane to show PVC usage".to_string();
+        return Ok(());
+    }
+
+    if app.right_pane.path.is_empty() {
+        app.message = "F2: No PVC selected".to_string();
+        return Ok(());
+    }
+
+    let path_clone = app.right_pane.path.clone();
+    let parts: Vec<&str> = path_clone.split('/').collect();
+    if parts.len() >= 2 {
+        let namespace = parts[0];
+        let pvc = parts[1];
+
+        app.message = "Loading disk usage...".to_string();
+
+        match app.remote_fs.get_disk_usage(namespace, pvc).await {
+            Ok(usage) => {
+                app.message = format!("📊 {} - {}", pvc, usage);
+            }
+            Err(e) => {
+                app.message = format!("Error getting disk usage: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_disk_analyzer_enter(app: &mut App) -> Result<()> {
+    use crate::app::ActivePane;
+
+    if app.active_pane != ActivePane::Right {
+        app.message = "F3: Switch to right pane for disk analysis".to_string();
+        return Ok(());
+    }
+
+    if app.right_pane.path.is_empty() {
+        app.message = "F3: No PVC selected".to_string();
+        return Ok(());
+    }
+
+    let path_clone = app.right_pane.path.clone();
+    let parts: Vec<&str> = path_clone.split('/').collect();
+    if parts.len() >= 3 {
+        let namespace = parts[0].to_string();
+        let pvc = parts[1].to_string();
+        let current_path = format!("/{}", parts[2..].join("/"));
+
+        app.message = "Analyzing disk usage...".to_string();
+
+        match app
+            .remote_fs
+            .get_directory_sizes(&namespace, &pvc, &current_path)
+            .await
+        {
+            Ok(sizes) => {
+                // Convert to file entries with size info in name
+                app.right_pane.entries = sizes
+                    .iter()
+                    .map(|(name, size, is_dir)| crate::fs::types::FileEntry {
+                        name: format!("{:>8} {}", format_size(*size), name),
+                        size: *size,
+                        is_dir: *is_dir,
+                        modified: None,
+                        permissions: None,
+                    })
+                    .collect();
+
+                if !app.right_pane.entries.is_empty() {
+                    app.right_pane.state.select(Some(0));
+                }
+
+                app.mode = AppMode::DiskAnalyzer;
+                app.message = format!(
+                    "📊 Disk Analysis: {} - Esc to exit, Enter to drill down",
+                    current_path
+                );
+            }
+            Err(e) => {
+                app.message = format!("Error analyzing disk: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_disk_analyzer(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            // Exit analyzer, return to normal mode and refresh
+            app.mode = AppMode::Normal;
+
+            let path_clone = app.right_pane.path.clone();
+            let parts: Vec<&str> = path_clone.split('/').collect();
+            if parts.len() >= 3 {
+                let namespace = parts[0];
+                let pvc = parts[1];
+                let current_path = format!("/{}", parts[2..].join("/"));
+
+                app.refresh_right_pane(namespace, pvc, &current_path)
+                    .await?;
+            }
+
+            app.message = "Returned to file browser".to_string();
+        }
+        KeyCode::Up => {
+            app.right_pane.select_previous();
+        }
+        KeyCode::Down => {
+            app.right_pane.select_next();
+        }
+        KeyCode::Enter => {
+            // Drill down into selected directory
+            if let Some(entry) = app.right_pane.selected_entry() {
+                if entry.is_dir {
+                    // Extract the actual name (after the size)
+                    let name = entry
+                        .name
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or(&entry.name)
+                        .to_string();
+
+                    let path_clone = app.right_pane.path.clone();
+                    let parts: Vec<&str> = path_clone.split('/').collect();
+                    if parts.len() >= 3 {
+                        let namespace = parts[0].to_string();
+                        let pvc = parts[1].to_string();
+                        let current_path = format!("/{}", parts[2..].join("/"));
+                        let new_path = format!("{}/{}", current_path, name);
+
+                        app.right_pane.path = format!("{}/{}{}", namespace, pvc, new_path);
+
+                        match app
+                            .remote_fs
+                            .get_directory_sizes(&namespace, &pvc, &new_path)
+                            .await
+                        {
+                            Ok(sizes) => {
+                                app.right_pane.entries = sizes
+                                    .iter()
+                                    .map(|(n, size, is_dir)| crate::fs::types::FileEntry {
+                                        name: format!("{:>8} {}", format_size(*size), n),
+                                        size: *size,
+                                        is_dir: *is_dir,
+                                        modified: None,
+                                        permissions: None,
+                                    })
+                                    .collect();
+
+                                if !app.right_pane.entries.is_empty() {
+                                    app.right_pane.state.select(Some(0));
+                                }
+
+                                app.message =
+                                    format!("📊 Disk Analysis: {} - Esc to exit", new_path);
+                            }
+                            Err(e) => {
+                                app.message = format!("Error: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            // Go up one directory in analyzer
+            let path_clone = app.right_pane.path.clone();
+            let parts: Vec<&str> = path_clone.split('/').collect();
+            if parts.len() >= 3 {
+                let namespace = parts[0].to_string();
+                let pvc = parts[1].to_string();
+                let current_path = format!("/{}", parts[2..].join("/"));
+
+                if current_path != "/data" {
+                    let path = std::path::Path::new(&current_path);
+                    if let Some(parent) = path.parent() {
+                        let new_path = if parent.to_string_lossy().is_empty()
+                            || parent.to_string_lossy() == "/"
+                        {
+                            "/data".to_string()
+                        } else {
+                            parent.to_string_lossy().to_string()
+                        };
+
+                        app.right_pane.path = format!("{}/{}{}", namespace, pvc, new_path);
+
+                        match app
+                            .remote_fs
+                            .get_directory_sizes(&namespace, &pvc, &new_path)
+                            .await
+                        {
+                            Ok(sizes) => {
+                                app.right_pane.entries = sizes
+                                    .iter()
+                                    .map(|(n, size, is_dir)| crate::fs::types::FileEntry {
+                                        name: format!("{:>8} {}", format_size(*size), n),
+                                        size: *size,
+                                        is_dir: *is_dir,
+                                        modified: None,
+                                        permissions: None,
+                                    })
+                                    .collect();
+
+                                if !app.right_pane.entries.is_empty() {
+                                    app.right_pane.state.select(Some(0));
+                                }
+
+                                app.message = format!("📊 Disk Analysis: {}", new_path);
+                            }
+                            Err(e) => {
+                                app.message = format!("Error: {}", e);
+                            }
+                        }
+                    }
+                } else {
+                    // At root, exit analyzer
+                    app.mode = AppMode::Normal;
+                    app.refresh_right_pane(&namespace, &pvc, "/data").await?;
+                    app.message = "Returned to file browser".to_string();
+                }
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
