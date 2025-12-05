@@ -21,7 +21,7 @@ A dual-pane TUI file manager for Kubernetes persistent volumes, inspired by Midn
 
 ```bash
 cargo build --release
-./target/release/skipper
+./target/release/abyss
 ```
 
 ## Controls
