@@ -4,6 +4,9 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crate::app::{App, AppMode};
 
 pub async fn handle_events(app: &mut App) -> Result<()> {
+    // Poll for sync progress updates (non-blocking)
+    let _ = poll_sync_progress(app).await;
+    
     if event::poll(std::time::Duration::from_millis(100))? {
         if let Event::Key(key) = event::read()? {
             match app.mode {
@@ -64,6 +67,18 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::F(8) => {
             // Delete
             handle_delete(app).await?;
+        }
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Toggle sync mode
+            handle_sync_toggle(app)?;
+        }
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Manual one-time sync
+            handle_sync_now(app).await?;
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Dry-run sync (preview changes)
+            handle_sync_dry_run(app).await?;
         }
         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             // Select storage type for the ACTIVE pane
@@ -167,11 +182,16 @@ async fn handle_storage_select(app: &mut App, key: KeyEvent) -> Result<()> {
                     app.message = "Switched to local filesystem".to_string();
                     
                 } else if name.contains("PersistentVolumes") {
-                    // Direct PV access
+                    // Direct PV access - check if K8s is available
+                    let Some(ref storage_manager) = app.storage_manager else {
+                        app.message = "Kubernetes not available".to_string();
+                        return Ok(());
+                    };
+                    
                     app.mode = AppMode::SelectPv;
                     app.message = "Loading PVs...".to_string();
 
-                    let pvs = app.storage_manager.list_all_storage().await?;
+                    let pvs = storage_manager.list_all_storage().await?;
 
                     let entries: Vec<_> = pvs
                         .iter()
@@ -264,9 +284,15 @@ async fn handle_storage_select(app: &mut App, key: KeyEvent) -> Result<()> {
                     app.message = "Select cloud provider (↑/↓ to navigate, Enter to select, Esc to cancel)".to_string();
                     
                 } else if name.contains("PersistentVolumeClaims") {
+                    // PVC access - check if K8s is available
+                    let Some(ref storage_manager) = app.storage_manager else {
+                        app.message = "Kubernetes not available".to_string();
+                        return Ok(());
+                    };
+                    
                     // PVC access - show namespace selection
                     app.mode = AppMode::SelectNamespace;
-                    app.namespaces = app.storage_manager.get_namespaces().await?;
+                    app.namespaces = storage_manager.get_namespaces().await?;
 
                     // Display namespaces in active pane
                     let entries: Vec<_> = app
@@ -400,13 +426,20 @@ async fn handle_namespace_select(app: &mut App, key: KeyEvent) -> Result<()> {
                 // Update current namespace
                 app.current_namespace = selected_namespace.clone();
 
+                // Check if K8s is available
+                let Some(ref storage_manager) = app.storage_manager else {
+                    app.message = "Kubernetes not available".to_string();
+                    app.mode = AppMode::Normal;
+                    return Ok(());
+                };
+
                 // Move to PVC selection
                 app.mode = AppMode::SelectPvc;
                 app.message =
                     "Select PVC (↑/↓ to navigate, Enter to select, Esc to cancel)".to_string();
 
                 // Load PVCs for selected namespace
-                let pvcs = app.storage_manager.list_pvcs(&selected_namespace).await?;
+                let pvcs = storage_manager.list_pvcs(&selected_namespace).await?;
 
                 // Convert PVCs to file entries for display
                 app.right_pane.entries = pvcs
@@ -448,6 +481,13 @@ async fn handle_pvc_select(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Enter => {
             if let Some(entry) = app.right_pane.selected_entry() {
+                // Check if K8s is available
+                let Some(ref remote_fs) = app.remote_fs else {
+                    app.message = "Kubernetes not available".to_string();
+                    app.mode = AppMode::Normal;
+                    return Ok(());
+                };
+                
                 // Extract PVC name (remove capacity info)
                 let pvc_name = entry
                     .name
@@ -461,7 +501,7 @@ async fn handle_pvc_select(app: &mut App, key: KeyEvent) -> Result<()> {
                 let k8s_backend = crate::fs::K8sBackend::new(
                     namespace.clone(),
                     pvc_name.clone(),
-                    app.remote_fs.clone(),
+                    remote_fs.clone(),
                 );
                 app.right_pane.storage = std::sync::Arc::new(k8s_backend);
                 app.right_pane.path = "/data".to_string();
@@ -492,6 +532,13 @@ async fn handle_pv_select(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Enter => {
             if let Some(entry) = app.right_pane.selected_entry() {
+                // Check if K8s is available
+                let Some(ref remote_fs) = app.remote_fs else {
+                    app.message = "Kubernetes not available".to_string();
+                    app.mode = AppMode::Normal;
+                    return Ok(());
+                };
+                
                 // Extract PV name (before first space)
                 let pv_name = entry
                     .name
@@ -510,7 +557,7 @@ async fn handle_pv_select(app: &mut App, key: KeyEvent) -> Result<()> {
                 let k8s_backend = crate::fs::K8sBackend::new(
                     namespace.to_string(),
                     pv_name.clone(),
-                    app.remote_fs.clone(),
+                    remote_fs.clone(),
                 );
                 app.right_pane.storage = std::sync::Arc::new(k8s_backend);
                 app.right_pane.path = "/data".to_string();
@@ -724,9 +771,15 @@ async fn handle_disk_usage(app: &mut App) -> Result<()> {
         let namespace = parts[0];
         let pvc = parts[1];
 
+        // Check if K8s is available
+        let Some(ref remote_fs) = app.remote_fs else {
+            app.message = "Kubernetes not available".to_string();
+            return Ok(());
+        };
+
         app.message = "Loading disk usage...".to_string();
 
-        match app.remote_fs.get_disk_usage(namespace, pvc).await {
+        match remote_fs.get_disk_usage(namespace, pvc).await {
             Ok(usage) => {
                 app.message = format!("📊 {} - {}", pvc, usage);
             }
@@ -759,10 +812,15 @@ async fn handle_disk_analyzer_enter(app: &mut App) -> Result<()> {
         let pvc = parts[1].to_string();
         let current_path = format!("/{}", parts[2..].join("/"));
 
+        // Check if K8s is available
+        let Some(ref remote_fs) = app.remote_fs else {
+            app.message = "Kubernetes not available".to_string();
+            return Ok(());
+        };
+
         app.message = "Analyzing disk usage...".to_string();
 
-        match app
-            .remote_fs
+        match remote_fs
             .get_directory_sizes(&namespace, &pvc, &current_path)
             .await
         {
@@ -799,6 +857,16 @@ async fn handle_disk_analyzer_enter(app: &mut App) -> Result<()> {
 }
 
 async fn handle_disk_analyzer(app: &mut App, key: KeyEvent) -> Result<()> {
+    // Check if K8s is available for disk analyzer operations
+    let remote_fs = match &app.remote_fs {
+        Some(fs) => fs.clone(),
+        None => {
+            app.message = "Kubernetes not available".to_string();
+            app.mode = AppMode::Normal;
+            return Ok(());
+        }
+    };
+    
     match key.code {
         KeyCode::Esc => {
             // Exit analyzer, return to normal mode and refresh
@@ -837,8 +905,7 @@ async fn handle_disk_analyzer(app: &mut App, key: KeyEvent) -> Result<()> {
 
                         app.right_pane.path = format!("{}/{}{}", namespace, pvc, new_path);
 
-                        match app
-                            .remote_fs
+                        match remote_fs
                             .get_directory_sizes(&namespace, &pvc, &new_path)
                             .await
                         {
@@ -891,8 +958,7 @@ async fn handle_disk_analyzer(app: &mut App, key: KeyEvent) -> Result<()> {
 
                         app.right_pane.path = format!("{}/{}{}", namespace, pvc, new_path);
 
-                        match app
-                            .remote_fs
+                        match remote_fs
                             .get_directory_sizes(&namespace, &pvc, &new_path)
                             .await
                         {
@@ -930,5 +996,253 @@ async fn handle_disk_analyzer(app: &mut App, key: KeyEvent) -> Result<()> {
         _ => {}
     }
 
+    Ok(())
+}
+
+// ============================================================================
+// Sync Handlers (Phase 3)
+// ============================================================================
+
+/// Toggle sync mode between enabled and disabled.
+fn handle_sync_toggle(app: &mut App) -> Result<()> {
+    use crate::app::SyncStatus;
+    
+    app.sync_enabled = !app.sync_enabled;
+    
+    if app.sync_enabled {
+        app.sync_status = SyncStatus::Idle;
+        app.message = "🔄 Sync enabled - Left pane ↔ Right pane | Ctrl+Y to sync now, Ctrl+D for dry-run".to_string();
+    } else {
+        app.sync_status = SyncStatus::Disabled;
+        app.message = "Sync disabled".to_string();
+    }
+    
+    Ok(())
+}
+
+/// Perform a one-time sync between left and right panes.
+/// This spawns the sync as a background task and returns immediately.
+async fn handle_sync_now(app: &mut App) -> Result<()> {
+    use crate::app::SyncStatus;
+    use crate::sync::{SyncEngine, SyncConfig, SyncMode};
+    
+    if !app.sync_enabled {
+        app.message = "Sync not enabled - Press Ctrl+S to enable".to_string();
+        return Ok(());
+    }
+    
+    // Check if already syncing
+    if app.sync_task.is_some() {
+        app.message = "⚠️ Sync already in progress".to_string();
+        return Ok(());
+    }
+    
+    app.sync_status = SyncStatus::Scanning;
+    app.message = "🔄 Starting sync (background)...".to_string();
+    
+    // Get backends and paths from both panes
+    let left_backend = app.left_pane.storage.clone();
+    let right_backend = app.right_pane.storage.clone();
+    let left_path = app.left_pane.path.clone();
+    let right_path = app.right_pane.path.clone();
+    
+    // Create progress channel
+    let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(100);
+    
+    // Create sync engine with progress
+    let config = SyncConfig {
+        mode: SyncMode::OneWay, // Left -> Right by default
+        ..Default::default()
+    };
+    
+    let mut engine = SyncEngine::with_progress(left_backend, right_backend, config, progress_tx);
+    
+    // Spawn sync task - runs in background, doesn't block TUI
+    let sync_handle = tokio::spawn(async move {
+        engine.sync(&left_path, &right_path).await
+    });
+    
+    // Store handles for polling in main event loop
+    app.sync_task = Some(sync_handle);
+    app.sync_progress_rx = Some(progress_rx);
+    
+    Ok(())
+}
+
+/// Poll for sync progress updates. Called from main event loop.
+/// Returns true if sync is still in progress.
+pub async fn poll_sync_progress(app: &mut App) -> Result<bool> {
+    use crate::app::{SyncStatus, Progress, ProgressStage};
+    use crate::sync::SyncPhase;
+    
+    // Check if we have an active sync
+    let Some(ref mut rx) = app.sync_progress_rx else {
+        return Ok(false);
+    };
+    
+    // Try to receive progress updates (non-blocking)
+    match rx.try_recv() {
+        Ok(p) => {
+            // Update progress bar
+            app.progress = Some(Progress {
+                stage: match p.phase {
+                    SyncPhase::Scanning => ProgressStage::Counting,
+                    SyncPhase::Comparing => ProgressStage::Counting,
+                    SyncPhase::Transferring => ProgressStage::Transferring,
+                    SyncPhase::Verifying => ProgressStage::Extracting,
+                    SyncPhase::Complete => ProgressStage::Complete,
+                },
+                current: p.files_done as u64,
+                total: p.total_files as u64,
+                current_file: p.current_file.clone(),
+                files_done: p.files_done,
+                total_files: p.total_files,
+            });
+            
+            app.sync_status = SyncStatus::Syncing {
+                current_file: p.current_file.clone(),
+                progress: p.percentage(),
+            };
+            
+            app.message = format!("🔄 Syncing: {}/{} files", p.files_done, p.total_files);
+            
+            Ok(true) // Still syncing
+        }
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+            // No new progress, check if task is done
+            if let Some(ref task) = app.sync_task {
+                if task.is_finished() {
+                    // Task finished, get result
+                    let task = app.sync_task.take().unwrap();
+                    app.sync_progress_rx = None;
+                    
+                    match task.await {
+                        Ok(Ok(result)) => {
+                            let files_synced = result.stats.files_copied + result.stats.dirs_created;
+                            app.sync_status = SyncStatus::Complete { files_synced };
+                            app.progress = None;
+                            app.message = format!(
+                                "✅ Sync complete: {} copied, {} created, {} skipped, {} conflicts",
+                                result.stats.files_copied,
+                                result.stats.dirs_created,
+                                result.stats.files_skipped,
+                                result.stats.conflicts
+                            );
+                            
+                            // Refresh both panes
+                            app.refresh_pane(crate::app::ActivePane::Left).await?;
+                            app.refresh_pane(crate::app::ActivePane::Right).await?;
+                        }
+                        Ok(Err(e)) => {
+                            app.sync_status = SyncStatus::Error { message: e.to_string() };
+                            app.progress = None;
+                            app.message = format!("❌ Sync failed: {}", e);
+                        }
+                        Err(e) => {
+                            app.sync_status = SyncStatus::Error { message: e.to_string() };
+                            app.progress = None;
+                            app.message = format!("❌ Sync task failed: {}", e);
+                        }
+                    }
+                    
+                    Ok(false) // Sync finished
+                } else {
+                    Ok(true) // Still syncing
+                }
+            } else {
+                Ok(false)
+            }
+        }
+        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+            // Channel closed, sync complete
+            app.sync_progress_rx = None;
+            if let Some(task) = app.sync_task.take() {
+                match task.await {
+                    Ok(Ok(result)) => {
+                        let files_synced = result.stats.files_copied + result.stats.dirs_created;
+                        app.sync_status = SyncStatus::Complete { files_synced };
+                        app.progress = None;
+                        app.message = format!(
+                            "✅ Sync complete: {} copied, {} created, {} skipped",
+                            result.stats.files_copied,
+                            result.stats.dirs_created,
+                            result.stats.files_skipped
+                        );
+                        
+                        app.refresh_pane(crate::app::ActivePane::Left).await?;
+                        app.refresh_pane(crate::app::ActivePane::Right).await?;
+                    }
+                    Ok(Err(e)) => {
+                        app.sync_status = SyncStatus::Error { message: e.to_string() };
+                        app.progress = None;
+                        app.message = format!("❌ Sync failed: {}", e);
+                    }
+                    Err(e) => {
+                        app.sync_status = SyncStatus::Error { message: e.to_string() };
+                        app.progress = None;
+                        app.message = format!("❌ Sync task failed: {}", e);
+                    }
+                }
+            }
+            Ok(false)
+        }
+    }
+}
+
+/// Perform a dry-run sync to preview changes.
+async fn handle_sync_dry_run(app: &mut App) -> Result<()> {
+    use crate::app::SyncStatus;
+    use crate::sync::{SyncEngine, SyncConfig, SyncMode, SyncAction};
+    
+    app.sync_status = SyncStatus::Scanning;
+    app.message = "🔍 Analyzing changes (dry-run)...".to_string();
+    
+    // Get backends and paths from both panes
+    let left_backend = app.left_pane.storage.clone();
+    let right_backend = app.right_pane.storage.clone();
+    let left_path = app.left_pane.path.clone();
+    let right_path = app.right_pane.path.clone();
+    
+    // Create sync engine with dry-run enabled
+    let config = SyncConfig {
+        mode: SyncMode::OneWay,
+        dry_run: true,
+        ..Default::default()
+    };
+    
+    let mut engine = SyncEngine::new(left_backend, right_backend, config);
+    
+    // Perform dry-run
+    match engine.dry_run(&left_path, &right_path).await {
+        Ok(result) => {
+            // Count actions by type
+            let mut copies = 0;
+            let mut creates = 0;
+            let mut deletes = 0;
+            let mut skips = 0;
+            let mut conflicts = 0;
+            
+            for action in &result.actions {
+                match action {
+                    SyncAction::CopyToDestination { .. } | SyncAction::CopyToSource { .. } => copies += 1,
+                    SyncAction::CreateDirInDestination { .. } | SyncAction::CreateDirInSource { .. } => creates += 1,
+                    SyncAction::DeleteFromDestination { .. } | SyncAction::DeleteFromSource { .. } => deletes += 1,
+                    SyncAction::Skip { .. } => skips += 1,
+                    SyncAction::Conflict { .. } => conflicts += 1,
+                }
+            }
+            
+            app.sync_status = SyncStatus::Idle;
+            app.message = format!(
+                "📋 Dry-run: {} to copy, {} to create, {} to delete, {} skip, {} conflicts | Ctrl+Y to apply",
+                copies, creates, deletes, skips, conflicts
+            );
+        }
+        Err(e) => {
+            app.sync_status = SyncStatus::Error { message: e.to_string() };
+            app.message = format!("❌ Dry-run failed: {}", e);
+        }
+    }
+    
     Ok(())
 }

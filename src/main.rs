@@ -2,6 +2,7 @@ mod app;
 mod events;
 mod fs;
 mod k8s;
+mod sync;
 mod ui;
 
 use anyhow::Result;

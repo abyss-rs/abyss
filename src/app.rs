@@ -21,9 +21,9 @@ pub struct App {
     pub right_pane: Pane,
     pub active_pane: ActivePane,
     pub message: String,
-    pub k8s_client: K8sClient,
-    pub storage_manager: StorageManager,
-    pub remote_fs: RemoteFs,
+    pub k8s_client: Option<K8sClient>,
+    pub storage_manager: Option<StorageManager>,
+    pub remote_fs: Option<RemoteFs>,
     pub mode: AppMode,
     pub namespaces: Vec<String>,
     pub current_namespace: String,
@@ -34,6 +34,39 @@ pub struct App {
     pub background_task: Option<tokio::task::JoinHandle<anyhow::Result<String>>>,
     // Delete confirmation target (full_path, is_local, is_dir)
     pub delete_target: Option<DeleteTarget>,
+    // Sync state
+    pub sync_enabled: bool,
+    pub sync_status: SyncStatus,
+    // Sync background task and progress receiver
+    pub sync_task: Option<tokio::task::JoinHandle<anyhow::Result<crate::sync::SyncResult>>>,
+    pub sync_progress_rx: Option<tokio::sync::mpsc::Receiver<crate::sync::SyncProgress>>,
+}
+
+/// Current sync status display.
+#[derive(Debug, Clone, Default)]
+pub enum SyncStatus {
+    #[default]
+    Disabled,
+    Idle,
+    Scanning,
+    Syncing { current_file: String, progress: f32 },
+    Complete { files_synced: usize },
+    Error { message: String },
+}
+
+impl SyncStatus {
+    pub fn display(&self) -> String {
+        match self {
+            Self::Disabled => "Sync: Off".to_string(),
+            Self::Idle => "Sync: Idle".to_string(),
+            Self::Scanning => "Sync: Scanning...".to_string(),
+            Self::Syncing { current_file, progress } => {
+                format!("Sync: {} ({:.0}%)", current_file, progress * 100.0)
+            }
+            Self::Complete { files_synced } => format!("Sync: Done ({} files)", files_synced),
+            Self::Error { message } => format!("Sync Error: {}", message),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -71,10 +104,20 @@ pub enum ActivePane {
 
 impl App {
     pub async fn new() -> Result<Self> {
-        let k8s_client = K8sClient::new().await?;
-        let current_namespace = k8s_client.current_namespace().to_string();
-        let storage_manager = StorageManager::new(k8s_client.client());
-        let remote_fs = RemoteFs::new(k8s_client.client());
+        // Try to initialize K8s, but don't fail if unavailable
+        let (k8s_client, storage_manager, remote_fs, current_namespace, k8s_message) = 
+            match K8sClient::new().await {
+                Ok(client) => {
+                    let namespace = client.current_namespace().to_string();
+                    let storage_mgr = StorageManager::new(client.client());
+                    let remote = RemoteFs::new(client.client());
+                    (Some(client), Some(storage_mgr), Some(remote), namespace, None)
+                }
+                Err(e) => {
+                    // K8s not available - app will work without it
+                    (None, None, None, "default".to_string(), Some(format!("K8s unavailable: {}", e)))
+                }
+            };
 
         let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         
@@ -85,11 +128,17 @@ impl App {
         let mut right_pane = Pane::new(home_dir.clone());
         right_pane.is_active = false;
 
+        let welcome_msg = if let Some(k8s_err) = k8s_message {
+            format!("Welcome to Abyss ({})", k8s_err)
+        } else {
+            "Welcome to Abyss - Press Ctrl+N to change pane storage type".to_string()
+        };
+
         let mut app = Self {
             left_pane,
             right_pane,
             active_pane: ActivePane::Left,
-            message: "Welcome to Abyss - Press Ctrl+N to change pane storage type".to_string(),
+            message: welcome_msg,
             k8s_client,
             storage_manager,
             remote_fs,
@@ -100,6 +149,10 @@ impl App {
             progress: None,
             background_task: None,
             delete_target: None,
+            sync_enabled: false,
+            sync_status: SyncStatus::Disabled,
+            sync_task: None,
+            sync_progress_rx: None,
         };
 
         // Load initial directories for both panes
