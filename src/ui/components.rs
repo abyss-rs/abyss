@@ -69,21 +69,21 @@ fn build_help_text(app: &App) -> Vec<Span<'static>> {
             spans.push(Span::styled(":Exit", text_style));
         }
         AppMode::Normal => {
-            // Function keys
-            spans.push(Span::styled("F5", key_style));
+            // Function keys sorted
+            spans.push(Span::styled("F3", key_style));
+            spans.push(Span::styled(":View ", text_style));
+            spans.push(Span::styled("│", sep_style));
+
+            spans.push(Span::styled(" F4", key_style));
+            spans.push(Span::styled(":Edit ", text_style));
+            spans.push(Span::styled("│", sep_style));
+
+            spans.push(Span::styled(" F5", key_style));
             spans.push(Span::styled(":Cp ", text_style));
             spans.push(Span::styled("│", sep_style));
             
             spans.push(Span::styled(" F6", key_style));
             spans.push(Span::styled(":Mv ", text_style));
-            spans.push(Span::styled("│", sep_style));
-            
-            spans.push(Span::styled(" F4", key_style));
-            spans.push(Span::styled(":Edit ", text_style));
-            spans.push(Span::styled("│", sep_style));
-            
-            spans.push(Span::styled(" F9", key_style));
-            spans.push(Span::styled(":Analyz ", text_style));
             spans.push(Span::styled("│", sep_style));
             
             spans.push(Span::styled(" F7", key_style));
@@ -92,6 +92,10 @@ fn build_help_text(app: &App) -> Vec<Span<'static>> {
             
             spans.push(Span::styled(" F8", key_style));
             spans.push(Span::styled(":Del ", text_style));
+            spans.push(Span::styled("│", sep_style));
+
+            spans.push(Span::styled(" F9", key_style));
+            spans.push(Span::styled(":Analyz ", text_style));
             spans.push(Span::styled("│", sep_style));
             
             // Storage
@@ -166,11 +170,12 @@ fn build_help_text(app: &App) -> Vec<Span<'static>> {
 }
 
 /// Render file editor.
-pub fn render_file_editor(f: &mut Frame, editor: &crate::app::TextEditor) {
-    let area = f.area();
+pub fn render_file_editor(f: &mut Frame, editor: &crate::app::TextEditor, area: Rect) {
+    // Clear the area first to prevent artifacts (panes bleeding through)
+    f.render_widget(Clear, area);
     
     // Editor styling
-    let bg_color = Color::Rgb(20, 20, 30); // Dark pleasant blue-ish black
+    let bg_color = Color::Black; // Standard black for best compatibility
     let border_style = if editor.modified {
          Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
@@ -199,14 +204,29 @@ pub fn render_file_editor(f: &mut Frame, editor: &crate::app::TextEditor) {
     let start_line = editor.scroll_offset;
     let end_line = (start_line + visible_lines).min(editor.content.len());
     
+    // Get file extension
+    let extension = std::path::Path::new(&editor.filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt");
+
+    // Collect visible lines to highlight (with some context if possible, but line-by-line is safer for perf)
+    // Tree-sitter works best on full files. 
+    // OPTIMIZATION: For now, we highlight line-by-line using our compatibility wrapper. 
+    // This allows basic highlighting (keywords/strings) without parsing 10MB file on every scroll.
+    // However, multi-line comments may be broken. 
+    // User asked for "tree-sitter support", and line-by-line is acceptable for TUI responsiveness.
+    
     for (i, line_idx) in (start_line..end_line).enumerate() {
         if i as u16 >= inner_area.height {
             break;
         }
         
         let line_content = &editor.content[line_idx];
+        
+        // Use highlight_line which calls tree-sitter on the single line
         f.render_widget(
-            Paragraph::new(line_content.as_str()),
+            Paragraph::new(crate::ui::syntax::highlight_line(line_content, extension)),
             Rect::new(
                 inner_area.x,
                 inner_area.y + i as u16,
@@ -419,14 +439,12 @@ pub fn render_rename_popup(f: &mut Frame, text_input: &crate::app::TextInput) {
 }
 
 /// Render file viewer overlay.
-pub fn render_file_viewer(f: &mut Frame, content: &[String], scroll: usize, filename: &str) {
-    let area = f.area();
-    
-    // Use most of the screen
+pub fn render_file_viewer(f: &mut Frame, content: &[String], scroll: usize, filename: &str, area: Rect) {
+    // Use most of the screen (passed area)
     let margin = 2;
     let popup_area = Rect::new(
-        margin,
-        margin,
+        area.x + margin,
+        area.y + margin,
         area.width.saturating_sub(margin * 2),
         area.height.saturating_sub(margin * 2),
     );
@@ -435,6 +453,12 @@ pub fn render_file_viewer(f: &mut Frame, content: &[String], scroll: usize, file
     
     // Get visible lines
     let visible_height = popup_area.height.saturating_sub(2) as usize;
+    // Get file extension
+    let extension = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt");
+
     let visible_lines: Vec<Line> = content
         .iter()
         .skip(scroll)
@@ -442,13 +466,18 @@ pub fn render_file_viewer(f: &mut Frame, content: &[String], scroll: usize, file
         .enumerate()
         .map(|(i, line)| {
             let line_num = scroll + i + 1;
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{:4} ", line_num),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::raw(line.as_str()),
-            ])
+            ];
+            
+            // Highlight the code content
+            let highlighted = crate::ui::syntax::highlight_line(line, extension);
+            spans.extend(highlighted.spans);
+            
+            Line::from(spans)
         })
         .collect();
     

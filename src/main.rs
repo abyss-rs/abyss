@@ -103,7 +103,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                 let filename = app.active_pane().selected_entry()
                     .map(|e| e.name.clone())
                     .unwrap_or_default();
-                ui::components::render_file_viewer(f, &app.view_content, app.view_scroll, &filename);
+                // Use main content area (chunks[0])
+                ui::components::render_file_viewer(f, &app.view_content, app.view_scroll, &filename, chunks[0]);
             }
             
             // Render search popup
@@ -121,7 +122,8 @@ async fn run_app<B: ratatui::backend::Backend>(
             
             // Render file editor
             if matches!(app.mode, app::AppMode::EditFile | app::AppMode::EditorSearch) {
-                ui::components::render_file_editor(f, &app.editor);
+                // Use main content area (chunks[0]) to avoid overlapping status/help bar
+                ui::components::render_file_editor(f, &app.editor, chunks[0]);
             }
 
             if matches!(app.mode, app::AppMode::EditorSearch) {

@@ -1,5 +1,6 @@
 pub mod components;
 pub mod pane;
+pub mod syntax;
 
 pub use components::{
     render_delete_confirm, render_help_bar, render_popup, 

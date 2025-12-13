@@ -28,7 +28,15 @@ blake3 = { version = "1.8", features = ["rayon"] }  # Fast multicore hashing
 rayon = "1.11"           # Parallel processing
 governor = "0.10"        # Rate limiting / bandwidth throttling
 nonzero_ext = "0.3"      # NonZero utilities for governor
-
+# Downgrading to match language parsers (Rust is 0.24, others are older)
+tree-sitter = "=0.24.4"
+tree-sitter-highlight = "=0.24.4"
+tree-sitter-rust = "0.23" 
+tree-sitter-go = "0.23"
+tree-sitter-hcl = "1.0"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-md = "0.3"
 [dev-dependencies]
 tempfile = "3.23"
 
