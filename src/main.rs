@@ -92,6 +92,46 @@ async fn run_app<B: ratatui::backend::Backend>(
                     render_delete_confirm(f, target);
                 }
             }
+            
+            // Render rename popup
+            if matches!(app.mode, app::AppMode::Rename) {
+                ui::components::render_rename_popup(f, &app.text_input);
+            }
+            
+            // Render file viewer
+            if matches!(app.mode, app::AppMode::ViewFile) {
+                let filename = app.active_pane().selected_entry()
+                    .map(|e| e.name.clone())
+                    .unwrap_or_default();
+                ui::components::render_file_viewer(f, &app.view_content, app.view_scroll, &filename);
+            }
+            
+            // Render search popup
+            if matches!(app.mode, app::AppMode::Search) {
+                ui::components::render_search_popup(f, &app.text_input, " Search ");
+            }
+            
+            // Render editor search popup
+            if matches!(app.mode, app::AppMode::EditorSearch) {
+                // Ensure editor is rendered first (below) or render it here?
+                // Logic below renders editor for EditFile. Let's include EditorSearch there.
+                // Or duplicate render_file_editor call here.
+                // Best structure:
+            }
+            
+            // Render file editor
+            if matches!(app.mode, app::AppMode::EditFile | app::AppMode::EditorSearch) {
+                ui::components::render_file_editor(f, &app.editor);
+            }
+
+            if matches!(app.mode, app::AppMode::EditorSearch) {
+                ui::components::render_search_popup(f, &app.text_input, " Where Is ");
+            }
+            
+            // Render large file confirmation
+            if matches!(app.mode, app::AppMode::ConfirmLargeLoad) {
+                ui::components::render_confirm_large_load_popup(f, app);
+            }
 
             if show_progress {
                 if let Some(ref progress) = app.progress {

@@ -184,6 +184,26 @@ impl crate::fs::backend::StorageBackend for LocalBackend {
         Ok(data)
     }
     
+    async fn read_range(&self, path: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        let mut file = tokio::fs::File::open(self.full_path(path)).await
+            .context("Failed to open local file")?;
+        
+        file.seek(std::io::SeekFrom::Start(offset)).await
+            .context("Failed to seek file")?;
+            
+        let mut buffer = vec![0u8; length as usize];
+        // Read exact or until EOF
+        let mut read = 0;
+        while read < buffer.len() {
+             let n = file.read(&mut buffer[read..]).await?;
+             if n == 0 { break; }
+             read += n;
+        }
+        buffer.truncate(read);
+        Ok(buffer)
+    }
+    
     async fn write_bytes(&self, path: &str, data: Vec<u8>) -> Result<()> {
         let dest = self.full_path(path);
         if let Some(parent) = dest.parent() {

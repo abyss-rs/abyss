@@ -14,6 +14,68 @@ pub enum AppMode {
     ConfigureCloud,      // Enter bucket/credentials for cloud storage
     DiskAnalyzer,        // ncdu-like disk usage view
     ConfirmDelete,       // Confirmation dialog for delete
+    Rename,              // Rename file/directory
+    ViewFile,            // View file contents
+    Search,              // Search for files
+    EditFile,            // Edit file contents (nano-like)
+    ConfirmLargeLoad,    // Confirm loading large remote file
+    EditorSearch,        // Search text inside editor
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LargeFileAction {
+    View,
+    Edit,
+}
+
+/// Text input state for rename/search operations.
+#[derive(Debug, Clone, Default)]
+pub struct TextInput {
+    /// Current input text.
+    pub value: String,
+    /// Cursor position in the text.
+    pub cursor: usize,
+    /// Original value (for rename - to know what to rename from).
+    pub original: String,
+}
+
+impl TextInput {
+    pub fn new(initial: &str) -> Self {
+        Self {
+            value: initial.to_string(),
+            cursor: initial.len(),
+            original: initial.to_string(),
+        }
+    }
+    
+    pub fn insert(&mut self, c: char) {
+        self.value.insert(self.cursor, c);
+        self.cursor += 1;
+    }
+    
+    pub fn delete_back(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            self.value.remove(self.cursor);
+        }
+    }
+    
+    pub fn move_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+    
+    pub fn move_right(&mut self) {
+        if self.cursor < self.value.len() {
+            self.cursor += 1;
+        }
+    }
+    
+    pub fn clear(&mut self) {
+        self.value.clear();
+        self.cursor = 0;
+    }
 }
 
 pub struct App {
@@ -40,6 +102,129 @@ pub struct App {
     // Sync background task and progress receiver
     pub sync_task: Option<tokio::task::JoinHandle<anyhow::Result<crate::sync::SyncResult>>>,
     pub sync_progress_rx: Option<tokio::sync::mpsc::Receiver<crate::sync::SyncProgress>>,
+    // Text input for rename/search
+    pub text_input: TextInput,
+    // File viewer content
+    pub view_content: Vec<String>,
+    pub view_scroll: usize,
+    // File editor
+    pub editor: TextEditor,
+    
+    // Large file handling
+    pub pending_large_action: Option<LargeFileAction>,
+    pub view_file_offset: u64,
+    pub view_file_path: String,
+    pub view_file_size: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TextEditor {
+    pub content: Vec<String>,
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub scroll_offset: usize,
+    pub filename: String,
+    pub modified: bool,
+    pub cut_buffer: Option<String>,
+}
+
+impl TextEditor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        if self.content.is_empty() {
+            self.content.push(String::new());
+        }
+        let line = &mut self.content[self.cursor_row];
+        if self.cursor_col >= line.len() {
+            line.push(c);
+            self.cursor_col = line.len();
+        } else {
+            line.insert(self.cursor_col, c);
+            self.cursor_col += 1;
+        }
+        self.modified = true;
+    }
+
+    pub fn insert_newline(&mut self) {
+        if self.content.is_empty() {
+            self.content.push(String::new());
+            self.content.push(String::new());
+            self.cursor_row = 1;
+            self.cursor_col = 0;
+            self.modified = true;
+            return;
+        }
+        
+        let line = &mut self.content[self.cursor_row];
+        let new_line = if self.cursor_col < line.len() {
+            let tail = line.split_off(self.cursor_col);
+            tail
+        } else {
+            String::new()
+        };
+        
+        self.content.insert(self.cursor_row + 1, new_line);
+        self.cursor_row += 1;
+        self.cursor_col = 0;
+        self.modified = true;
+    }
+
+    pub fn delete_back(&mut self) {
+        if self.cursor_col > 0 {
+            let line = &mut self.content[self.cursor_row];
+            line.remove(self.cursor_col - 1);
+            self.cursor_col -= 1;
+            self.modified = true;
+        } else if self.cursor_row > 0 {
+            let line = self.content.remove(self.cursor_row);
+            self.cursor_row -= 1;
+            let prev_line = &mut self.content[self.cursor_row];
+            self.cursor_col = prev_line.len();
+            prev_line.push_str(&line);
+            self.modified = true;
+        }
+    }
+
+    pub fn cut_line(&mut self) {
+        if self.content.is_empty() {
+            return;
+        }
+        
+        // If buffer is empty, cut the whole line.
+        // If we want Nano behavior:
+        // - Ctrl+K cuts entire line. 
+        // - Multiple Ctrl+K appends to buffer? Nano does append if you don't move cursor.
+        // For simplicity, let's just implement single line cut for now, replacing buffer.
+        
+        if self.cursor_row < self.content.len() {
+            let line = self.content.remove(self.cursor_row);
+            self.cut_buffer = Some(line);
+            self.modified = true;
+            
+            // If we removed the last line and it's now empty, ensure there's at least one line
+            if self.content.is_empty() {
+                self.content.push(String::new());
+            } else if self.cursor_row >= self.content.len() {
+                self.cursor_row = self.content.len() - 1;
+            }
+            self.cursor_col = 0;
+        }
+    }
+
+    pub fn uncut_line(&mut self) {
+        if let Some(ref line) = self.cut_buffer {
+            if self.content.is_empty() {
+                 self.content.push(line.clone());
+            } else {
+                 self.content.insert(self.cursor_row, line.clone());
+                 self.cursor_row += 1;
+            }
+            self.modified = true;
+        }
+    }
 }
 
 /// Current sync status display.
@@ -153,6 +338,14 @@ impl App {
             sync_status: SyncStatus::Disabled,
             sync_task: None,
             sync_progress_rx: None,
+            text_input: TextInput::default(),
+            view_content: Vec::new(),
+            view_scroll: 0,
+            editor: TextEditor::default(),
+            pending_large_action: None,
+            view_file_offset: 0,
+            view_file_path: String::new(),
+            view_file_size: 0,
         };
 
         // Load initial directories for both panes

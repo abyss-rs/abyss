@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, AppMode};
+use crate::app::{App, AppMode, LargeFileAction};
 
 pub async fn handle_events(app: &mut App) -> Result<()> {
     // Poll for sync progress updates (non-blocking)
@@ -9,6 +9,13 @@ pub async fn handle_events(app: &mut App) -> Result<()> {
     
     if event::poll(std::time::Duration::from_millis(100))? {
         if let Event::Key(key) = event::read()? {
+            // Global quit handlers - work in ALL modes
+            if key.code == KeyCode::Char('q') || 
+               (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
+                app.should_quit = true;
+                return Ok(());
+            }
+            
             match app.mode {
                 AppMode::Normal => handle_normal_mode(app, key).await?,
                 AppMode::SelectStorage => handle_storage_select(app, key).await?,
@@ -19,6 +26,12 @@ pub async fn handle_events(app: &mut App) -> Result<()> {
                 AppMode::ConfigureCloud => handle_configure_cloud(app, key).await?,
                 AppMode::DiskAnalyzer => handle_disk_analyzer(app, key).await?,
                 AppMode::ConfirmDelete => handle_confirm_delete(app, key).await?,
+                AppMode::Rename => handle_rename_mode(app, key).await?,
+                AppMode::ViewFile => handle_view_file_mode(app, key).await?,
+                AppMode::Search => handle_search_mode(app, key).await?,
+                AppMode::EditFile => handle_edit_file_mode(app, key).await?,
+                AppMode::ConfirmLargeLoad => handle_confirm_large_load_mode(app, key).await?,
+                AppMode::EditorSearch => handle_editor_search_mode(app, key).await?,
             }
         }
     }
@@ -27,12 +40,6 @@ pub async fn handle_events(app: &mut App) -> Result<()> {
 
 async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.should_quit = true;
-        }
-        KeyCode::Char('q') => {
-            app.should_quit = true;
-        }
         KeyCode::Tab => {
             app.switch_pane();
         }
@@ -57,11 +64,19 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
             handle_move(app).await?;
         }
         KeyCode::F(2) => {
-            // Show disk usage for current PVC
-            handle_disk_usage(app).await?;
+            // Rename file/directory
+            handle_rename_start(app)?;
         }
         KeyCode::F(3) => {
-            // ncdu-like disk analyzer
+            // View file contents
+            handle_view_file(app).await?;
+        }
+        KeyCode::F(4) => {
+            // Edit file (nano-like)
+            handle_edit_file_start(app).await?;
+        }
+        KeyCode::F(9) => {
+            // ncdu-like disk analyzer (moved from F4)
             handle_disk_analyzer_enter(app).await?;
         }
         KeyCode::F(7) => {
@@ -71,6 +86,10 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::F(8) => {
             // Delete
             handle_delete(app).await?;
+        }
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Search/find files
+            handle_search_start(app)?;
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             // Toggle sync mode
@@ -333,18 +352,26 @@ async fn handle_storage_select(app: &mut App, key: KeyEvent) -> Result<()> {
 async fn handle_cloud_provider_select(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc => {
+            // Return to storage selection menu
             app.mode = AppMode::SelectStorage;
-            // Return to storage selection
-            app.right_pane.entries = vec![
+            let pane = app.active_pane_mut();
+            pane.entries = vec![
                 crate::fs::types::FileEntry {
-                    name: "PersistentVolumes (PV) - Direct access".to_string(),
+                    name: "📂 Local Filesystem".to_string(),
                     size: 0,
                     is_dir: true,
                     modified: None,
                     permissions: None,
                 },
                 crate::fs::types::FileEntry {
-                    name: "PersistentVolumeClaims (PVC) - Namespace scoped".to_string(),
+                    name: "🗄 PersistentVolumes (PV) - Direct access".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+                crate::fs::types::FileEntry {
+                    name: "📦 PersistentVolumeClaims (PVC) - Namespace scoped".to_string(),
                     size: 0,
                     is_dir: true,
                     modified: None,
@@ -358,37 +385,27 @@ async fn handle_cloud_provider_select(app: &mut App, key: KeyEvent) -> Result<()
                     permissions: None,
                 },
             ];
-            app.right_pane.state.select(Some(0));
-            app.message = "Cancelled - select storage type".to_string();
+            pane.state.select(Some(0));
+            app.message = "Select storage type".to_string();
         }
         KeyCode::Up => {
-            app.right_pane.select_previous();
+            app.active_pane_mut().select_previous();
         }
         KeyCode::Down => {
-            app.right_pane.select_next();
+            app.active_pane_mut().select_next();
         }
         KeyCode::Enter => {
-            if let Some(entry) = app.right_pane.selected_entry() {
+            if let Some(entry) = app.active_pane().selected_entry().cloned() {
                 let provider_name = entry.name.clone();
                 
-                // For now, show a message that cloud storage requires environment variables
-                // Full credential input UI would require a text input mode
+                // Show error message - user must set env vars first
+                // Stay in cloud provider selection (do NOT change mode or refresh)
                 app.message = format!(
-                    "☁ {} selected. Set credentials via environment variables:\n\
-                     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET\n\
-                     Then restart the application.\n\
-                     (Full credential input UI coming soon)",
+                    "❌ {} requires env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET. Press Esc to go back.",
                     provider_name.trim_start_matches("☁ ")
                 );
                 
-                // Return to normal mode for now
-                app.mode = AppMode::Normal;
-                
-                // Note: A complete implementation would:
-                // 1. Enter ConfigureCloud mode
-                // 2. Display a text input form for bucket/region/credentials
-                // 3. Store the configuration
-                // 4. Connect to the cloud storage and display files
+                // Do NOT change mode - stay here until user presses Esc
             }
         }
         _ => {}
@@ -1347,15 +1364,628 @@ async fn handle_sync_dry_run(app: &mut App) -> Result<()> {
             
             app.sync_status = SyncStatus::Idle;
             app.message = format!(
-                "📋 Dry-run: {} to copy, {} to create, {} to delete, {} skip, {} conflicts | Ctrl+Y to apply",
+                "Dry-run: {} to copy, {} to create, {} to delete, {} skip, {} conflicts | Ctrl+Y to apply",
                 copies, creates, deletes, skips, conflicts
             );
         }
         Err(e) => {
             app.sync_status = SyncStatus::Error { message: e.to_string() };
-            app.message = format!("❌ Dry-run failed: {}", e);
+            app.message = format!("Dry-run failed: {}", e);
         }
     }
     
+    Ok(())
+}
+
+// ============================================================================
+// Rename Handlers
+// ============================================================================
+
+/// Start rename mode for selected file.
+fn handle_rename_start(app: &mut App) -> Result<()> {
+    if let Some(entry) = app.active_pane().selected_entry().cloned() {
+        if entry.name == ".." {
+            app.message = "Cannot rename '..'".to_string();
+            return Ok(());
+        }
+        
+        app.text_input = crate::app::TextInput::new(&entry.name);
+        app.mode = AppMode::Rename;
+        app.message = "Enter new name (Enter to confirm, Esc to cancel)".to_string();
+    } else {
+        app.message = "No file selected".to_string();
+    }
+    Ok(())
+}
+
+/// Handle rename mode input.
+async fn handle_rename_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::Normal;
+            app.message = "Rename cancelled".to_string();
+        }
+        KeyCode::Enter => {
+            let new_name = app.text_input.value.trim().to_string();
+            let old_name = app.text_input.original.clone();
+            
+            if new_name.is_empty() {
+                app.message = "Name cannot be empty".to_string();
+                return Ok(());
+            }
+            
+            if new_name == old_name {
+                app.mode = AppMode::Normal;
+                app.message = "Name unchanged".to_string();
+                return Ok(());
+            }
+            
+            // Build paths
+            let pane = app.active_pane();
+            let base_path = &pane.path;
+            let old_path = if base_path.ends_with('/') || base_path.is_empty() {
+                format!("{}{}", base_path, old_name)
+            } else {
+                format!("{}/{}", base_path, old_name)
+            };
+            let new_path = if base_path.ends_with('/') || base_path.is_empty() {
+                format!("{}{}", base_path, new_name)
+            } else {
+                format!("{}/{}", base_path, new_name)
+            };
+            
+            let backend = app.active_pane().storage.clone();
+            
+            match backend.rename(&old_path, &new_path).await {
+                Ok(_) => {
+                    app.message = format!("Renamed '{}' to '{}'", old_name, new_name);
+                    app.mode = AppMode::Normal;
+                    app.refresh_active_pane().await?;
+                }
+                Err(e) => {
+                    app.message = format!("Rename failed: {}", e);
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            app.text_input.delete_back();
+        }
+        KeyCode::Left => {
+            app.text_input.move_left();
+        }
+        KeyCode::Right => {
+            app.text_input.move_right();
+        }
+        KeyCode::Char(c) => {
+            app.text_input.insert(c);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// ============================================================================
+// View File Handlers
+// ============================================================================
+
+/// View selected file contents.
+async fn handle_view_file(app: &mut App) -> Result<()> {
+    if let Some(entry) = app.active_pane().selected_entry().cloned() {
+        if entry.name == ".." || entry.is_dir {
+            app.message = "Cannot view directory".to_string();
+            return Ok(());
+        }
+        
+        let pane = app.active_pane();
+        let path = if pane.path.ends_with('/') || pane.path.is_empty() {
+            format!("{}{}", pane.path, entry.name)
+        } else {
+            format!("{}/{}", pane.path, entry.name)
+        };
+        
+        let backend = pane.storage.clone();
+        
+        // Size check
+        let is_remote = matches!(backend.backend_type(), crate::fs::BackendType::S3 { .. } | crate::fs::BackendType::Gcs { .. }); // Gcs might have fields too
+        // Wait, Gcs variant def? Error said `Gcs`. I'll assume fields usually.
+        // Actually error said `Gcs` variant, didn't complain about struct for GCS, but complained `GCS` not found.
+        // I will check backend.rs if needed, but safe bet is wildcard or correct naming.
+        // Error for S3 said "not a unit struct", so it has fields.
+        // If Gcs has fields, I need { .. }.
+        let size = entry.size;
+        
+        // Remote > 40MB -> Confirm
+        if is_remote && size > 40 * 1024 * 1024 {
+             app.pending_large_action = Some(LargeFileAction::View);
+             app.view_file_path = path;
+             app.view_file_size = size;
+             app.mode = AppMode::ConfirmLargeLoad;
+             app.message = format!("Remote file is large ({} MB). View? (y/n)", size / 1024 / 1024);
+             return Ok(());
+        }
+        
+        // Streaming for > 10MB (Local or Remote)
+        if size > 1 * 1024 * 1024 {
+             return load_view_chunk(app, backend, &path, 0, size).await;
+        }
+
+        match backend.read_bytes(&path).await {
+            Ok(data) => {
+                let content = String::from_utf8_lossy(&data);
+                app.view_content = content.lines().map(|s| s.to_string()).collect();
+                app.view_scroll = 0;
+                app.view_file_size = size;
+                app.view_file_offset = 0;
+                app.view_file_path = path;
+                app.mode = AppMode::ViewFile;
+                app.message = format!("Viewing: {} - q/Esc to close", entry.name);
+            }
+            Err(e) => {
+                app.message = format!("Failed to read file: {}", e);
+            }
+        }
+    } else {
+        app.message = "No file selected".to_string();
+    }
+    Ok(())
+}
+
+async fn load_view_chunk(app: &mut App, backend: std::sync::Arc<dyn crate::fs::StorageBackend>, path: &str, offset: u64, total_size: u64) -> Result<()> {
+    match backend.read_range(path, offset, 64 * 1024).await { // 64KB chunk
+        Ok(data) => {
+             let content = String::from_utf8_lossy(&data);
+             app.view_content = content.lines().map(|s| s.to_string()).collect();
+             // Add continuation marker if we truncated a line or middle of file?
+             // Simple approach: just show lines.
+             app.view_scroll = 0;
+             app.view_file_size = total_size;
+             app.view_file_offset = offset;
+             app.view_file_path = path.to_string();
+             app.mode = AppMode::ViewFile;
+             app.message = format!("Viewing (Stream {}%): {} - q/Esc to close", (offset * 100) / total_size.max(1), path);
+        }
+        Err(e) => {
+             app.message = format!("Failed to stream: {}", e);
+        }
+    }
+    Ok(())
+}
+
+/// Handle view file mode input.
+async fn handle_view_file_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.mode = AppMode::Normal;
+            app.view_content.clear();
+            app.message = String::new();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.view_scroll > 0 {
+                app.view_scroll -= 1;
+            } else if app.view_file_size > 0 && app.view_file_offset >= 64 * 1024 {
+                // Prev Chunk
+                let prev_offset = app.view_file_offset - 64 * 1024;
+                let pane = app.active_pane();
+                let backend = pane.storage.clone();
+                return load_view_chunk(app, backend, &app.view_file_path.clone(), prev_offset, app.view_file_size).await;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.view_scroll < app.view_content.len().saturating_sub(20) {
+                app.view_scroll += 1;
+            } else if app.view_file_size > 0 && app.view_file_offset + 64 * 1024 < app.view_file_size {
+                // Next Chunk
+                let next_offset = app.view_file_offset + 64 * 1024;
+                let pane = app.active_pane();
+                let backend = pane.storage.clone();
+                return load_view_chunk(app, backend, &app.view_file_path.clone(), next_offset, app.view_file_size).await;
+            }
+        }
+        KeyCode::PageUp => {
+            if app.view_scroll > 0 {
+                app.view_scroll = app.view_scroll.saturating_sub(20);
+            } else if app.view_file_size > 0 && app.view_file_offset >= 64 * 1024 {
+                // Prev Chunk
+                let prev_offset = app.view_file_offset - 64 * 1024;
+                let pane = app.active_pane();
+                let backend = pane.storage.clone();
+                return load_view_chunk(app, backend, &app.view_file_path.clone(), prev_offset, app.view_file_size).await;
+            }
+        }
+        KeyCode::PageDown => {
+            if app.view_scroll < app.view_content.len().saturating_sub(20) {
+                 app.view_scroll = (app.view_scroll + 20).min(app.view_content.len().saturating_sub(20));
+            } else if app.view_file_size > 0 && app.view_file_offset + 64 * 1024 < app.view_file_size {
+                 // Next Chunk
+                 let next_offset = app.view_file_offset + 64 * 1024;
+                 let pane = app.active_pane();
+                 let backend = pane.storage.clone();
+                 return load_view_chunk(app, backend, &app.view_file_path.clone(), next_offset, app.view_file_size).await;
+            }
+        }
+        KeyCode::Home => {
+            app.view_scroll = 0;
+            // Optionally: Jump to offset 0?
+             if app.view_file_size > 0 && app.view_file_offset > 0 {
+                  let pane = app.active_pane();
+                  let backend = pane.storage.clone();
+                  return load_view_chunk(app, backend, &app.view_file_path.clone(), 0, app.view_file_size).await;
+             }
+        }
+        KeyCode::End => {
+            app.view_scroll = app.view_content.len().saturating_sub(20);
+             // Optionally: Jump to last chunk? (Tricky to calculate offset without ceil)
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle confirmation for large file load.
+async fn handle_confirm_large_load_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            if let Some(action) = app.pending_large_action.clone() {
+                // Clear pending
+                app.pending_large_action = None;
+                
+                match action {
+                    LargeFileAction::View => {
+                         let pane = app.active_pane();
+                         let backend = pane.storage.clone();
+                         // Load first chunk
+                         load_view_chunk(app, backend, &app.view_file_path.clone(), 0, app.view_file_size).await?;
+                    }
+                    LargeFileAction::Edit => {
+                         // Proceed to edit
+                         // We need to call logic similar to handle_edit_file_start but bypass check
+                         // Since we don't have separate function for "load editor", we duplicate logic for now
+                         let pane = app.active_pane();
+                         let backend = pane.storage.clone();
+                         match backend.read_bytes(&app.view_file_path).await {
+                             Ok(data) => {
+                                 let content = String::from_utf8_lossy(&data).to_string();
+                                 let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                                 app.editor = crate::app::TextEditor {
+                                     content: if lines.is_empty() { vec![String::new()] } else { lines },
+                                     cursor_row: 0,
+                                     cursor_col: 0,
+                                     scroll_offset: 0,
+                                     filename: app.view_file_path.rsplit('/').next().unwrap_or("").to_string(), // Approximate default
+                                     modified: false,
+                                     cut_buffer: None,
+                                 };
+                                 app.mode = AppMode::EditFile;
+                                 app.message = format!("Editing: {} - ^O: WriteOut, ^X: Exit, ^K: Cut, ^U: Uncut", app.editor.filename);
+                             }
+                             Err(e) => {
+                                 app.message = format!("Failed to read file: {}", e);
+                                 app.mode = AppMode::Normal;
+                             }
+                         }
+                    }
+                }
+            } else {
+                 app.mode = AppMode::Normal;
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Esc => {
+            app.mode = AppMode::Normal;
+            app.message = "Cancelled load".to_string();
+            app.pending_large_action = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// ============================================================================
+// Search Handlers
+// ============================================================================
+
+/// Start search mode.
+fn handle_search_start(app: &mut App) -> Result<()> {
+    app.text_input = crate::app::TextInput::new("");
+    app.mode = AppMode::Search;
+    app.message = "Search: (Enter to find, Esc to cancel)".to_string();
+    Ok(())
+}
+
+/// Handle search mode input.
+async fn handle_search_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::Normal;
+            app.message = "Search cancelled".to_string();
+        }
+        KeyCode::Enter => {
+            let pattern = app.text_input.value.to_lowercase();
+            if pattern.is_empty() {
+                app.mode = AppMode::Normal;
+                app.message = "Empty search pattern".to_string();
+                return Ok(());
+            }
+            
+            // Search in current pane entries
+            let pane = app.active_pane();
+            let mut found_idx = None;
+            let mut found_name = String::new();
+            
+            for (i, entry) in pane.entries.iter().enumerate() {
+                if entry.name.to_lowercase().contains(&pattern) {
+                    found_idx = Some(i);
+                    found_name = entry.name.clone();
+                    break;
+                }
+            }
+            
+            if let Some(i) = found_idx {
+                app.active_pane_mut().state.select(Some(i));
+                app.message = format!("Found: {}", found_name);
+            } else {
+                app.message = format!("No match for '{}'", pattern);
+            }
+            
+            app.mode = AppMode::Normal;
+        }
+        KeyCode::Backspace => {
+            app.text_input.delete_back();
+        }
+        KeyCode::Char(c) => {
+            app.text_input.insert(c);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// ============================================================================
+// File Editor Handlers
+// ============================================================================
+
+/// Start edit mode for selected file.
+async fn handle_edit_file_start(app: &mut App) -> Result<()> {
+    if let Some(entry) = app.active_pane().selected_entry().cloned() {
+        if entry.name == ".." {
+            app.message = "Cannot edit '..'".to_string();
+            return Ok(());
+        }
+        
+        
+        if entry.is_dir {
+            app.message = "Cannot edit directory".to_string();
+            return Ok(());
+        }
+
+        let pane = app.active_pane();
+        
+        // Size check for remote
+        let backend = pane.storage.clone();
+        let is_remote = matches!(backend.backend_type(), crate::fs::BackendType::S3 { .. } | crate::fs::BackendType::Gcs { .. });
+        
+        if is_remote && entry.size > 40 * 1024 * 1024 {
+             // Build path just for storing state
+             let path = if pane.path.ends_with('/') || pane.path.is_empty() {
+                format!("{}{}", pane.path, entry.name)
+             } else {
+                format!("{}/{}", pane.path, entry.name)
+             };
+             
+             app.view_file_path = path;
+             app.view_file_size = entry.size;
+             app.pending_large_action = Some(LargeFileAction::Edit);
+             app.mode = AppMode::ConfirmLargeLoad;
+             app.message = format!("Remote file is large ({} MB). Download/Edit? (y/n)", entry.size / 1024 / 1024);
+             return Ok(());
+        }
+        let path = if pane.path.ends_with('/') || pane.path.is_empty() {
+            format!("{}{}", pane.path, entry.name)
+        } else {
+            format!("{}/{}", pane.path, entry.name)
+        };
+        
+        let backend = pane.storage.clone();
+        
+        // Read file content
+        match backend.read_bytes(&path).await {
+            Ok(data) => {
+                let content = String::from_utf8_lossy(&data).to_string();
+                let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                
+                app.editor = crate::app::TextEditor {
+                    content: if lines.is_empty() { vec![String::new()] } else { lines },
+                    cursor_row: 0,
+                    cursor_col: 0,
+                    scroll_offset: 0,
+                    filename: entry.name.clone(),
+                    modified: false,
+                    cut_buffer: None,
+                };
+                
+                app.mode = AppMode::EditFile;
+                app.message = format!("Editing: {} - ^O: WriteOut, ^X: Exit, ^K: Cut, ^U: Uncut", entry.name);
+            }
+            Err(e) => {
+                app.message = format!("Failed to read file: {}", e);
+            }
+        }
+    } else {
+        app.message = "No file selected".to_string();
+    }
+    Ok(())
+}
+
+/// Handle edit file mode input.
+async fn handle_edit_file_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        // Exit: Ctrl+X or Ctrl+Q or Esc
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.editor.modified {
+                // TODO: Confirm discard changes? For now just exit
+                app.message = "Changes discarded".to_string();
+            }
+            app.mode = AppMode::Normal;
+        }
+        // Save: Ctrl+O (Write Out) or Ctrl+S
+        KeyCode::Char('o') | KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Save file
+            let content = app.editor.content.join("\n");
+            let pane = app.active_pane();
+            let path = if pane.path.ends_with('/') || pane.path.is_empty() {
+                format!("{}{}", pane.path, app.editor.filename)
+            } else {
+                format!("{}/{}", pane.path, app.editor.filename)
+            };
+            
+            let backend = pane.storage.clone();
+            match backend.write_bytes(&path, content.as_bytes().to_vec()).await {
+                Ok(_) => {
+                    app.editor.modified = false;
+                    app.message = format!("Saved '{}'", app.editor.filename);
+                    app.refresh_active_pane().await?;
+                }
+                Err(e) => {
+                    app.message = format!("Save failed: {}", e);
+                }
+            }
+        }
+        // Cut Line: Ctrl+K
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.editor.cut_line();
+        }
+        // Uncut (Paste) Line: Ctrl+U
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.editor.uncut_line();
+        }
+        // Search: Ctrl+W
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.mode = AppMode::EditorSearch;
+            app.text_input.clear();
+            app.message = "Search (Where Is): ".to_string();
+        }
+        KeyCode::Up => {
+            if app.editor.cursor_row > 0 {
+                app.editor.cursor_row -= 1;
+                let line_len = app.editor.content[app.editor.cursor_row].len();
+                if app.editor.cursor_col > line_len {
+                    app.editor.cursor_col = line_len;
+                }
+            }
+        }
+        KeyCode::Down => {
+            if app.editor.cursor_row < app.editor.content.len().saturating_sub(1) {
+                app.editor.cursor_row += 1;
+                let line_len = app.editor.content[app.editor.cursor_row].len();
+                if app.editor.cursor_col > line_len {
+                    app.editor.cursor_col = line_len;
+                }
+            }
+        }
+        KeyCode::Left => {
+            if app.editor.cursor_col > 0 {
+                app.editor.cursor_col -= 1;
+            } else if app.editor.cursor_row > 0 {
+                app.editor.cursor_row -= 1;
+                app.editor.cursor_col = app.editor.content[app.editor.cursor_row].len();
+            }
+        }
+        KeyCode::Right => {
+            let line_len = app.editor.content[app.editor.cursor_row].len();
+            if app.editor.cursor_col < line_len {
+                app.editor.cursor_col += 1;
+            } else if app.editor.cursor_row < app.editor.content.len().saturating_sub(1) {
+                app.editor.cursor_row += 1;
+                app.editor.cursor_col = 0;
+            }
+        }
+        KeyCode::Home => app.editor.cursor_col = 0,
+        KeyCode::End => app.editor.cursor_col = app.editor.content[app.editor.cursor_row].len(),
+        KeyCode::Backspace => app.editor.delete_back(),
+        KeyCode::Enter => app.editor.insert_newline(),
+        KeyCode::Char(c) => app.editor.insert_char(c),
+        _ => {}
+    }
+    
+    // Adjust scroll logic
+    if app.editor.cursor_row < app.editor.scroll_offset {
+        app.editor.scroll_offset = app.editor.cursor_row;
+    } else if app.editor.cursor_row >= app.editor.scroll_offset + 20 { // Assuming 20 lines visible
+         app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(19);
+    }
+    
+    Ok(())
+}
+
+/// Handle editor search mode input.
+async fn handle_editor_search_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::EditFile;
+            app.message = format!("Editing: {} - ^O: WriteOut, ^X: Exit, ^K: Cut, ^U: Uncut", app.editor.filename);
+        }
+        KeyCode::Enter => {
+            let pattern = app.text_input.value.clone();
+            if pattern.is_empty() {
+                app.mode = AppMode::EditFile;
+                return Ok(());
+            }
+            
+            // Search in editor content
+            let start_row = app.editor.cursor_row;
+            let start_col = app.editor.cursor_col;
+            
+            let mut found = false;
+            
+            // Simple search: forward from current line
+            for (i, line) in app.editor.content.iter().enumerate().skip(start_row) {
+                let check_col = if i == start_row { start_col } else { 0 };
+                let line_search = line.to_lowercase();
+                let pattern_search = pattern.to_lowercase();
+                
+                if let Some(idx) = line_search[check_col..].find(&pattern_search) {
+                    app.editor.cursor_row = i;
+                    app.editor.cursor_col = check_col + idx;
+                    found = true;
+                    // Adjust scroll
+                    if app.editor.cursor_row >= app.editor.scroll_offset + 20 {
+                        app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(10);
+                    }
+                    break;
+                }
+            }
+            
+            // Wrap around
+            if !found {
+                 for (i, line) in app.editor.content.iter().enumerate().take(start_row + 1) {
+                     let line_search = line.to_lowercase();
+                     let pattern_search = pattern.to_lowercase();
+                     if let Some(idx) = line_search.find(&pattern_search) {
+                        app.editor.cursor_row = i;
+                        app.editor.cursor_col = idx;
+                        found = true;
+                        // Adjust scroll
+                        if app.editor.cursor_row < app.editor.scroll_offset {
+                             app.editor.scroll_offset = i;
+                        } else if app.editor.cursor_row >= app.editor.scroll_offset + 20 {
+                             app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(10);
+                        }
+                        break;
+                     }
+                 }
+            }
+            
+            app.mode = AppMode::EditFile;
+            if found {
+                app.message = format!("Found '{}'", pattern);
+            } else {
+                app.message = format!("Not found '{}'", pattern);
+            }
+        }
+        KeyCode::Backspace => app.text_input.delete_back(),
+        KeyCode::Left => app.text_input.move_left(),
+        KeyCode::Right => app.text_input.move_right(),
+        KeyCode::Char(c) => app.text_input.insert(c),
+        _ => {}
+    }
     Ok(())
 }

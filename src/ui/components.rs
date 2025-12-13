@@ -30,12 +30,19 @@ fn build_help_text(app: &App) -> Vec<Span<'static>> {
     let text_style = Style::default().fg(Color::White);
     
     match app.mode {
-        AppMode::ConfirmDelete => {
+        AppMode::ConfirmDelete | AppMode::ConfirmLargeLoad => {
             spans.push(Span::styled("Y", key_style));
             spans.push(Span::styled(":Confirm ", text_style));
             spans.push(Span::styled("│", sep_style));
             spans.push(Span::styled(" N/Esc", key_style));
             spans.push(Span::styled(":Cancel", text_style));
+        }
+        AppMode::EditorSearch => {
+             spans.push(Span::styled("Enter", key_style));
+             spans.push(Span::styled(":Find ", text_style));
+             spans.push(Span::styled("│", sep_style));
+             spans.push(Span::styled(" Esc", key_style));
+             spans.push(Span::styled(":Cancel", text_style));
         }
         AppMode::SelectStorage | AppMode::SelectNamespace | AppMode::SelectPvc | 
         AppMode::SelectPv | AppMode::SelectCloudProvider | AppMode::ConfigureCloud => {
@@ -71,6 +78,14 @@ fn build_help_text(app: &App) -> Vec<Span<'static>> {
             spans.push(Span::styled(":Mv ", text_style));
             spans.push(Span::styled("│", sep_style));
             
+            spans.push(Span::styled(" F4", key_style));
+            spans.push(Span::styled(":Edit ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            
+            spans.push(Span::styled(" F9", key_style));
+            spans.push(Span::styled(":Analyz ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            
             spans.push(Span::styled(" F7", key_style));
             spans.push(Span::styled(":Mk ", text_style));
             spans.push(Span::styled("│", sep_style));
@@ -99,9 +114,116 @@ fn build_help_text(app: &App) -> Vec<Span<'static>> {
             spans.push(Span::styled(" q", key_style));
             spans.push(Span::styled(":Quit", text_style));
         }
+        AppMode::Rename => {
+            spans.push(Span::styled("Type", key_style));
+            spans.push(Span::styled(":New name ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" Enter", key_style));
+            spans.push(Span::styled(":Confirm ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" Esc", key_style));
+            spans.push(Span::styled(":Cancel", text_style));
+        }
+        AppMode::ViewFile => {
+            spans.push(Span::styled("j/k", key_style));
+            spans.push(Span::styled(":Scroll ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" PgUp/PgDn", key_style));
+            spans.push(Span::styled(":Page ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" Home/End", key_style));
+            spans.push(Span::styled(":Top/Bot ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" q/Esc", key_style));
+            spans.push(Span::styled(":Close", text_style));
+        }
+        AppMode::EditFile => {
+            spans.push(Span::styled("^O", key_style));
+            spans.push(Span::styled(":Write ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" ^K", key_style));
+            spans.push(Span::styled(":Cut ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" ^U", key_style));
+            spans.push(Span::styled(":Uncut ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" ^X", key_style));
+            spans.push(Span::styled(":Exit", text_style));
+        }
+        AppMode::Search => {
+            spans.push(Span::styled("Type", key_style));
+            spans.push(Span::styled(":Pattern ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" Enter", key_style));
+            spans.push(Span::styled(":Find ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" Esc", key_style));
+            spans.push(Span::styled(":Cancel", text_style));
+        }
     }
     
     spans
+}
+
+/// Render file editor.
+pub fn render_file_editor(f: &mut Frame, editor: &crate::app::TextEditor) {
+    let area = f.area();
+    
+    // Editor styling
+    let bg_color = Color::Rgb(20, 20, 30); // Dark pleasant blue-ish black
+    let border_style = if editor.modified {
+         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+         Style::default().fg(Color::Green)
+    };
+    
+    let title = if editor.modified {
+        format!(" Editing: {} (Modified) ", editor.filename)
+    } else {
+        format!(" Editing: {} ", editor.filename)
+    };
+    
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title)
+        .style(Style::default().bg(bg_color));
+    
+    f.render_widget(block.clone(), area);
+    
+    // Inner area for text
+    let inner_area = block.inner(area);
+    
+    // Render lines
+    let visible_lines = inner_area.height as usize;
+    let start_line = editor.scroll_offset;
+    let end_line = (start_line + visible_lines).min(editor.content.len());
+    
+    for (i, line_idx) in (start_line..end_line).enumerate() {
+        if i as u16 >= inner_area.height {
+            break;
+        }
+        
+        let line_content = &editor.content[line_idx];
+        f.render_widget(
+            Paragraph::new(line_content.as_str()),
+            Rect::new(
+                inner_area.x,
+                inner_area.y + i as u16,
+                inner_area.width,
+                1,
+            ),
+        );
+    }
+    
+    // Set cursor
+    let cursor_y = editor.cursor_row as i32 - editor.scroll_offset as i32;
+    if cursor_y >= 0 && cursor_y < inner_area.height as i32 {
+        f.set_cursor_position(
+            (inner_area.x + editor.cursor_col as u16,
+            inner_area.y + cursor_y as u16)
+        );
+    }
 }
 
 /// Render the status bar with message and sync status.
@@ -248,4 +370,195 @@ fn truncate_path(path: &str, max_len: usize) -> String {
     } else {
         format!("...{}", &path[path.len() - max_len + 3..])
     }
+}
+
+/// Render rename input popup.
+pub fn render_rename_popup(f: &mut Frame, text_input: &crate::app::TextInput) {
+    let area = f.area();
+    
+    let popup_width = 50u16.min(area.width - 4);
+    let popup_height = 5;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    
+    f.render_widget(Clear, popup_area);
+    
+    // Show input with cursor
+    let input_display = format!(
+        "{}|{}",
+        &text_input.value[..text_input.cursor],
+        &text_input.value[text_input.cursor..]
+    );
+    
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(input_display, Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(": Confirm  "),
+            Span::styled("Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+    
+    let popup = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Rename ")
+                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        )
+        .alignment(Alignment::Center);
+    
+    f.render_widget(popup, popup_area);
+}
+
+/// Render file viewer overlay.
+pub fn render_file_viewer(f: &mut Frame, content: &[String], scroll: usize, filename: &str) {
+    let area = f.area();
+    
+    // Use most of the screen
+    let margin = 2;
+    let popup_area = Rect::new(
+        margin,
+        margin,
+        area.width.saturating_sub(margin * 2),
+        area.height.saturating_sub(margin * 2),
+    );
+    
+    f.render_widget(Clear, popup_area);
+    
+    // Get visible lines
+    let visible_height = popup_area.height.saturating_sub(2) as usize;
+    let visible_lines: Vec<Line> = content
+        .iter()
+        .skip(scroll)
+        .take(visible_height)
+        .enumerate()
+        .map(|(i, line)| {
+            let line_num = scroll + i + 1;
+            Line::from(vec![
+                Span::styled(
+                    format!("{:4} ", line_num),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(line.as_str()),
+            ])
+        })
+        .collect();
+    
+    let title = format!(" {} (line {}/{}) ", filename, scroll + 1, content.len());
+    
+    let popup = Paragraph::new(visible_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green))
+                .title(title)
+                .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        )
+        .wrap(Wrap { trim: false });
+    
+    f.render_widget(popup, popup_area);
+}
+
+/// Render search input popup.
+pub fn render_search_popup(f: &mut Frame, text_input: &crate::app::TextInput, title: &str) {
+    let area = f.area();
+    
+    let popup_width = 50u16.min(area.width - 4);
+    let popup_height = 5;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    
+    f.render_widget(Clear, popup_area);
+    
+    // Show input with cursor
+    let input_display = format!(
+        "{}|{}",
+        &text_input.value[..text_input.cursor],
+        &text_input.value[text_input.cursor..]
+    );
+    
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Find: "),
+            Span::styled(input_display, Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(": Search  "),
+            Span::styled("Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+    
+    let popup = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(title)
+                .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        )
+        .alignment(Alignment::Center);
+    
+    f.render_widget(popup, popup_area);
+}
+
+/// Render large file confirmation popup.
+pub fn render_confirm_large_load_popup(f: &mut Frame, app: &crate::app::App) {
+    let area = f.area();
+    
+    // Check if View or Edit
+    let action_str = if matches!(app.pending_large_action, Some(crate::app::LargeFileAction::Edit)) { "Edit" } else { "View" };
+    let size_mb = app.view_file_size / 1024 / 1024;
+    
+    let blocks = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(format!("Remote file is large ({} MB)!", size_mb), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(format!("Download and {}? This may take time.", action_str)),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Enter/Y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(": Confirm  "),
+            Span::styled("Esc/N", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+    
+    let popup_width = 60u16.min(area.width.saturating_sub(4));
+    let popup_height = 7;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+    
+    if popup_x >= area.width || popup_y >= area.height {
+        return;
+    }
+    
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    
+    f.render_widget(Clear, popup_area);
+    
+    let popup = Paragraph::new(blocks)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(" ⚠ Large File Warning ")
+                .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        )
+        .alignment(Alignment::Center);
+
+    f.render_widget(popup, popup_area);
 }

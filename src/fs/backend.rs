@@ -186,6 +186,18 @@ pub trait StorageBackend: Send + Sync {
     
     /// Write bytes to a file (for cross-backend copy)
     async fn write_bytes(&self, path: &str, data: Vec<u8>) -> Result<()>;
+
+    /// Read a range of bytes from a file (for streaming/large files)
+    async fn read_range(&self, path: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+        // Default impl reads everything and slices (inefficient, override for performance)
+        let all = self.read_bytes(path).await?;
+        let start = offset as usize;
+        let end = (offset + length) as usize;
+        if start >= all.len() {
+            return Ok(Vec::new());
+        }
+        Ok(all[start..end.min(all.len())].to_vec())
+    }
     
     // ========== Metadata ==========
     
