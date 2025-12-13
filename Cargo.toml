@@ -16,6 +16,8 @@ tar = "0.4"
 futures = "0.3"
 chrono = "0.4"
 jwalk = "0.8"
+opendal = { version = "0.55", features = ["services-s3", "services-gcs"] }
+async-trait = "0.1"
 
 [profile.release]
 opt-level = 3

@@ -58,14 +58,14 @@
 **Status:** MVP Complete - Focus on extensibility
 
 ### 1.1 Virtual File System (VFS) Abstraction
-- [ ] **Refactor `RemoteFs`**: Decouple current K8s logic into a generic `FileSystemBackend` implementation
-- [ ] Define `FileSystemBackend` trait:
-  - Standardize: `list_dir()`, `read_stream()`, `write_stream()`, `delete()`, `mkdir()`, `stat()`, `rename()`
-  - Add capabilities flags (e.g., `supports_streaming`, `supports_append`, `supports_permissions`)
-- [ ] Refactor panes to use `Box<dyn FileSystemBackend>` instead of concrete types
-- [ ] Enable runtime backend switching (Local ↔ K8s ↔ S3)
-- [ ] Error handling standardization (custom `FsError` enum with context)
-- [ ] Path abstraction: `VfsPath` type for backend-agnostic paths
+- [x] **Refactor `RemoteFs`**: Decouple current K8s logic into a generic `FileSystemBackend` implementation
+- [x] Define `StorageBackend` trait (was `FileSystemBackend`):
+  - Standardize: `list_dir()`, `read_bytes()`, `write_bytes()`, `delete()`, `create_dir()`, `stat()`, `rename()`
+  - Add capabilities flags (`BackendCapabilities` struct)
+- [ ] Refactor panes to use `Box<dyn StorageBackend>` instead of concrete types (partial - using PaneBackend enum)
+- [x] Enable runtime backend switching (Local ↔ K8s ↔ S3)
+- [x] Error handling standardization (using `anyhow::Result` with context)
+- [ ] Path abstraction: `VfsPath` type for backend-agnostic paths (deferred)
 
 ### 1.2 Configuration System
 - [ ] Config file: `~/.config/abyss/config.toml`

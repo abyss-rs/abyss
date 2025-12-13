@@ -104,7 +104,14 @@ async fn run_app<B: ratatui::backend::Backend>(
 
                     // Create popup content
                     let type_str = if target.is_dir { "directory" } else { "file" };
-                    let location = if target.is_local { "LOCAL" } else { "REMOTE" };
+                    let location = if matches!(
+                        target.backend.backend_type(),
+                        crate::fs::BackendType::Local
+                    ) {
+                        "LOCAL"
+                    } else {
+                        "REMOTE"
+                    };
 
                     let text = vec![
                         Line::from(""),

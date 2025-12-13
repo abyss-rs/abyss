@@ -240,4 +240,104 @@ impl RemoteFs {
             .await?;
         Ok(())
     }
+
+    pub async fn is_dir(&self, namespace: &str, pvc: &str, path: &str) -> Result<bool> {
+        let pod_name = self.pod_manager.ensure_pod(namespace, pvc).await?;
+        let output = self
+            .pod_manager
+            .exec_command(
+                namespace,
+                &pod_name,
+                vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    format!("if [ -d \"{}\" ]; then echo yes; else echo no; fi", path),
+                ],
+            )
+            .await?;
+        Ok(output.trim() == "yes")
+    }
+}
+
+/// Kubernetes PVC storage backend
+pub struct K8sBackend {
+    pub namespace: String,
+    pub pvc: String,
+    pub fs: RemoteFs,
+}
+
+impl K8sBackend {
+    pub fn new(namespace: String, pvc: String, fs: RemoteFs) -> Self {
+        Self {
+            namespace,
+            pvc,
+            fs,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::fs::backend::StorageBackend for K8sBackend {
+    async fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>> {
+        self.fs.list_dir(&self.namespace, &self.pvc, path).await
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        self.fs.delete(&self.namespace, &self.pvc, path).await
+    }
+
+    async fn create_dir(&self, path: &str) -> Result<()> {
+        self.fs.create_dir(&self.namespace, &self.pvc, path).await
+    }
+
+    async fn is_dir(&self, path: &str) -> Result<bool> {
+        self.fs.is_dir(&self.namespace, &self.pvc, path).await
+    }
+
+    async fn upload(&self, local_path: &std::path::Path, remote_path: &str) -> Result<()> {
+        self.fs.copy_to_remote(&self.namespace, &self.pvc, local_path, remote_path).await
+    }
+
+    async fn download(&self, remote_path: &str, local_path: &std::path::Path) -> Result<()> {
+        self.fs.copy_from_remote(&self.namespace, &self.pvc, remote_path, local_path).await
+    }
+
+    async fn read_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        // Implement read via download to temp file
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp_path = std::env::temp_dir().join(format!("abyss_read_{}_{}", std::process::id(), ts));
+        
+        self.download(path, &temp_path).await?;
+        let data = tokio::fs::read(&temp_path).await?;
+        let _ = tokio::fs::remove_file(temp_path).await;
+        Ok(data)
+    }
+
+    async fn write_bytes(&self, path: &str, data: Vec<u8>) -> Result<()> {
+        // Implement write via upload from temp file
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp_path = std::env::temp_dir().join(format!("abyss_write_{}_{}", std::process::id(), ts));
+        
+        tokio::fs::write(&temp_path, &data).await?;
+        self.upload(&temp_path, path).await?;
+        let _ = tokio::fs::remove_file(temp_path).await;
+        Ok(())
+    }
+
+    fn backend_type(&self) -> crate::fs::backend::BackendType {
+        crate::fs::backend::BackendType::Kubernetes {
+            namespace: self.namespace.clone(),
+            pvc: self.pvc.clone(),
+        }
+    }
+
+    fn capabilities(&self) -> crate::fs::backend::BackendCapabilities {
+        crate::fs::backend::BackendCapabilities::kubernetes()
+    }
 }

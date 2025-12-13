@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -118,5 +118,103 @@ impl LocalFs {
         }
 
         normalized
+    }
+}
+
+/// Local filesystem backend adapter
+pub struct LocalBackend {
+    pub root: PathBuf,
+}
+
+impl LocalBackend {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+    
+    fn full_path(&self, path: &str) -> PathBuf {
+        if path.starts_with('/') {
+            PathBuf::from(path)
+        } else {
+            self.root.join(path)
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::fs::backend::StorageBackend for LocalBackend {
+    async fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>> {
+        LocalFs::list_dir(&self.full_path(path))
+    }
+    
+    async fn delete(&self, path: &str) -> Result<()> {
+        LocalFs::delete(&self.full_path(path))
+    }
+    
+    async fn create_dir(&self, path: &str) -> Result<()> {
+        tokio::fs::create_dir_all(self.full_path(path)).await?;
+        Ok(())
+    }
+    
+    async fn is_dir(&self, path: &str) -> Result<bool> {
+        let full = self.full_path(path);
+        Ok(full.is_dir())
+    }
+    
+    async fn upload(&self, local_path: &Path, remote_path: &str) -> Result<()> {
+        let dest = self.full_path(remote_path);
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        // Use copy_file_recursive logic or standard copy
+        // For local-to-local uploads, a simple recursive copy is best
+        LocalFs::copy_file(local_path, &dest)?;
+        Ok(())
+    }
+    
+    async fn download(&self, remote_path: &str, local_path: &Path) -> Result<()> {
+        let src = self.full_path(remote_path);
+        // For local-to-local downloads, same recursive copy
+        LocalFs::copy_file(&src, local_path)?;
+        Ok(())
+    }
+    
+    async fn read_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let data = tokio::fs::read(self.full_path(path)).await
+            .context("Failed to read local file")?;
+        Ok(data)
+    }
+    
+    async fn write_bytes(&self, path: &str, data: Vec<u8>) -> Result<()> {
+        let dest = self.full_path(path);
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(dest, data).await
+            .context("Failed to write local file")?;
+        Ok(())
+    }
+    
+    async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        let from_path = self.full_path(from);
+        let to_path = self.full_path(to);
+        tokio::fs::rename(from_path, to_path).await
+            .context("Failed to rename")?;
+        Ok(())
+    }
+    
+    fn backend_type(&self) -> crate::fs::backend::BackendType {
+        crate::fs::backend::BackendType::Local
+    }
+    
+    fn capabilities(&self) -> crate::fs::backend::BackendCapabilities {
+        crate::fs::backend::BackendCapabilities::local()
+    }
+    
+    fn root_path(&self) -> &str {
+        self.root.to_str().unwrap_or("/")
+    }
+
+    fn display_path(&self, path: &str) -> String {
+        self.full_path(path).to_string_lossy().to_string()
     }
 }

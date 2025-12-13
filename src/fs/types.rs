@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub enum PaneType {
     Local,
     Remote { namespace: String, pvc: String },
+    S3 { bucket: String, region: String, provider: String },
+    Gcs { bucket: String },
 }
 
 #[derive(Debug, Clone)]
