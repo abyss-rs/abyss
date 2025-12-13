@@ -111,38 +111,34 @@ Ensure your EC2 instance profile or ECS task role has appropriate S3 permissions
 
 ### DigitalOcean Spaces
 ```bash
-export AWS_ACCESS_KEY_ID=DO00XXXXXXXXXXXXXXXX
-export AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-export AWS_REGION=nyc3
-export S3_BUCKET=my-space
-export S3_ENDPOINT=https://nyc3.digitaloceanspaces.com
+export DO_ACCESS_KEY_ID=DO00XXXXXXXXXXXXXXXX
+export DO_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export DO_REGION=nyc3
+export DO_BUCKET=my-space
 ```
 
 ### Hetzner Object Storage
 ```bash
-export AWS_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-export AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-export AWS_REGION=fsn1
-export S3_BUCKET=my-bucket
-export S3_ENDPOINT=https://fsn1.your-objectstorage.com
+export HETZNER_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export HETZNER_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export HETZNER_REGION=fsn1
+export HETZNER_BUCKET=my-bucket
 ```
 
 ### Cloudflare R2
 ```bash
-export AWS_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-export AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-export AWS_REGION=auto
-export S3_BUCKET=my-bucket
-export S3_ENDPOINT=https://ACCOUNT_ID.r2.cloudflarestorage.com
+export R2_ACCOUNT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export R2_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export R2_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export R2_BUCKET=my-bucket
 ```
 
 ### MinIO (Self-hosted)
 ```bash
-export AWS_ACCESS_KEY_ID=minioadmin
-export AWS_SECRET_ACCESS_KEY=minioadmin
-export AWS_REGION=us-east-1
-export S3_BUCKET=my-bucket
-export S3_ENDPOINT=http://localhost:9000
+export MINIO_ACCESS_KEY=minioadmin
+export MINIO_SECRET_KEY=minioadmin
+export MINIO_BUCKET=my-bucket
+# Note: Currently hardcoded to connect to http://localhost:9000
 ```
 
 ### Google Cloud Storage
@@ -180,11 +176,10 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 ### Wasabi
 ```bash
-export AWS_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-export AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-export AWS_REGION=us-east-1
-export S3_BUCKET=my-bucket
-export S3_ENDPOINT=https://s3.us-east-1.wasabisys.com
+export WASABI_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export WASABI_SECRET_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export WASABI_REGION=us-east-1
+export WASABI_BUCKET=my-bucket
 ```
 
 ## Sync Function

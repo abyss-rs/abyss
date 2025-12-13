@@ -396,16 +396,84 @@ async fn handle_cloud_provider_select(app: &mut App, key: KeyEvent) -> Result<()
         }
         KeyCode::Enter => {
             if let Some(entry) = app.active_pane().selected_entry().cloned() {
-                let provider_name = entry.name.clone();
+                let provider_name = entry.name.trim_start_matches("☁ ").to_string();
                 
-                // Show error message - user must set env vars first
-                // Stay in cloud provider selection (do NOT change mode or refresh)
-                app.message = format!(
-                    "❌ {} requires env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET. Press Esc to go back.",
-                    provider_name.trim_start_matches("☁ ")
-                );
+                // Helper to get env var or error
+                let get_env = |key: &str| -> Result<String> {
+                    std::env::var(key).map_err(|_| anyhow::anyhow!("Missing env var: {}", key))
+                };
                 
-                // Do NOT change mode - stay here until user presses Esc
+                let backend_result: Result<std::sync::Arc<dyn crate::fs::StorageBackend>> = match provider_name.as_str() {
+                    "AWS S3" => {
+                        let bucket = get_env("S3_BUCKET")?;
+                        let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+                        
+                        if let (Ok(key), Ok(secret)) = (std::env::var("AWS_ACCESS_KEY_ID"), std::env::var("AWS_SECRET_ACCESS_KEY")) {
+                             Ok(std::sync::Arc::new(crate::fs::s3::S3Fs::new_aws(&bucket, &region, &key, &secret)?))
+                        } else {
+                             // Try IAM
+                             Ok(std::sync::Arc::new(crate::fs::s3::S3Fs::new_with_iam(&bucket, &region)?))
+                        }
+                    },
+                    "Google Cloud Storage (GCS)" => {
+                        let bucket = get_env("GCS_BUCKET")?;
+                        if let Ok(cred) = std::env::var("GOOGLE_APPLICATION_CREDENTIALS") {
+                             Ok(std::sync::Arc::new(crate::fs::gcs::GcsFs::from_service_account(&bucket, &cred)?))
+                        } else {
+                             // Try Workload Identity / ADC
+                             Ok(std::sync::Arc::new(crate::fs::gcs::GcsFs::new_with_workload_identity(&bucket)?))
+                        }
+                    },
+                    "DigitalOcean Spaces" => {
+                        let bucket = get_env("DO_BUCKET")?;
+                        let region = get_env("DO_REGION")?;
+                        let key = get_env("DO_ACCESS_KEY_ID")?;
+                        let secret = get_env("DO_SECRET_ACCESS_KEY")?;
+                        Ok(std::sync::Arc::new(crate::fs::s3::S3Fs::new_digitalocean(&bucket, &region, &key, &secret)?))
+                    },
+                    "Hetzner Object Storage" => {
+                        let bucket = get_env("HETZNER_BUCKET")?;
+                        let region = get_env("HETZNER_REGION")?;
+                        let key = get_env("HETZNER_ACCESS_KEY")?;
+                        let secret = get_env("HETZNER_SECRET_ACCESS_KEY")?;
+                        Ok(std::sync::Arc::new(crate::fs::s3::S3Fs::new_hetzner(&bucket, &region, &key, &secret)?))
+                    },
+                    "Cloudflare R2" => {
+                        let bucket = get_env("R2_BUCKET")?;
+                        let account = get_env("R2_ACCOUNT_ID")?;
+                        let key = get_env("R2_ACCESS_KEY_ID")?;
+                        let secret = get_env("R2_SECRET_ACCESS_KEY")?;
+                        Ok(std::sync::Arc::new(crate::fs::s3::S3Fs::new_cloudflare_r2(&bucket, &account, &key, &secret)?))
+                    },
+                    "MinIO (Local/Self-hosted)" => {
+                        let bucket = get_env("MINIO_BUCKET")?;
+                        let key = get_env("MINIO_ACCESS_KEY")?;
+                        let secret = get_env("MINIO_SECRET_KEY")?;
+                        Ok(std::sync::Arc::new(crate::fs::s3::S3Fs::new_minio(&bucket, &key, &secret)?))
+                    },
+                    "Wasabi" => {
+                        let bucket = get_env("WASABI_BUCKET")?;
+                        let region = get_env("WASABI_REGION")?;
+                        let key = get_env("WASABI_ACCESS_KEY")?;
+                        let secret = get_env("WASABI_SECRET_KEY")?;
+                        Ok(std::sync::Arc::new(crate::fs::s3::S3Fs::new_wasabi(&bucket, &region, &key, &secret)?))
+                    },
+                    _ => Err(anyhow::anyhow!("Unknown provider: {}", provider_name)),
+                };
+                
+                match backend_result {
+                    Ok(backend) => {
+                        let pane = app.active_pane_mut();
+                        pane.storage = backend;
+                        pane.path = "".to_string(); // Root of bucket
+                        app.refresh_active_pane().await?;
+                        app.mode = AppMode::Normal;
+                        app.message = format!("Connected to {}", provider_name);
+                    }
+                    Err(e) => {
+                         app.message = format!("❌ Connection failed: {}", e);
+                    }
+                }
             }
         }
         _ => {}
