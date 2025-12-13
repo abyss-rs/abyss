@@ -169,9 +169,22 @@ impl App {
         };
         
         match pane.storage.list_dir(&pane.path).await {
-            Ok(entries) => {
+            Ok(mut entries) => {
+                // Add ".." entry at top if not at root
+                let is_root = pane.path.is_empty() || pane.path == "/" || pane.path == ".";
+                if !is_root {
+                    entries.insert(0, crate::fs::types::FileEntry {
+                        name: "..".to_string(),
+                        size: 0,
+                        is_dir: true,
+                        modified: None,
+                        permissions: None,
+                    });
+                }
+                
                 pane.entries = entries;
-                if pane.state.selected().is_none() && !pane.entries.is_empty() {
+                // Always reset cursor to first entry when directory changes
+                if !pane.entries.is_empty() {
                     pane.state.select(Some(0));
                 }
             }
@@ -254,6 +267,11 @@ impl App {
             }
 
             let entry_name = entry.name.clone();
+            
+            // Handle ".." to navigate up
+            if entry_name == ".." {
+                return self.navigate_up().await;
+            }
             
             // Generic path joining logic
             // Handle root path ("/" or "") vs subdirs

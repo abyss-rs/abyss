@@ -137,51 +137,31 @@ impl Pane {
             }
         };
 
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title)
-                    .border_style(border_style),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol(">> ");
+        // Only show selection highlight on active pane
+        let list = if self.is_active {
+            List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(title)
+                        .border_style(border_style),
+                )
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                )
+        } else {
+            // Inactive pane - no highlight
+            List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(title)
+                        .border_style(border_style),
+                )
+        };
 
         f.render_stateful_widget(list, area, &mut self.state);
     }
-}
-
-pub fn render_status_bar(f: &mut Frame, area: Rect, message: &str) {
-    let status =
-        Paragraph::new(message).style(Style::default().bg(Color::DarkGray).fg(Color::White));
-
-    f.render_widget(status, area);
-}
-
-pub fn render_help_bar(f: &mut Frame, area: Rect) {
-    let help_text = vec![
-        Span::styled("F2", Style::default().fg(Color::Yellow)),
-        Span::raw(" Info | "),
-        Span::styled("F3", Style::default().fg(Color::Yellow)),
-        Span::raw(" Analyze | "),
-        Span::styled("F5", Style::default().fg(Color::Yellow)),
-        Span::raw(" Copy | "),
-        Span::styled("F7", Style::default().fg(Color::Yellow)),
-        Span::raw(" MkDir | "),
-        Span::styled("F8", Style::default().fg(Color::Yellow)),
-        Span::raw(" Delete | "),
-        Span::styled("Tab", Style::default().fg(Color::Yellow)),
-        Span::raw(" Switch | "),
-        Span::styled("F10", Style::default().fg(Color::Yellow)),
-        Span::raw(" Quit"),
-    ];
-
-    let help = Paragraph::new(Line::from(help_text))
-        .style(Style::default().bg(Color::Blue).fg(Color::White));
-
-    f.render_widget(help, area);
 }

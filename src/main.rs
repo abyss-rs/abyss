@@ -13,16 +13,13 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap},
     Terminal,
 };
 use std::io;
 
 use app::App;
 use events::handle_events;
-use ui::{render_help_bar, render_status_bar};
+use ui::{render_delete_confirm, render_help_bar, render_progress_bar, render_status_bar, Pane};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -92,163 +89,19 @@ async fn run_app<B: ratatui::backend::Backend>(
             // Render delete confirmation popup if in ConfirmDelete mode
             if matches!(app.mode, app::AppMode::ConfirmDelete) {
                 if let Some(ref target) = app.delete_target {
-                    // Calculate popup area (centered, 60% width, 7 lines height)
-                    let area = f.area();
-                    let popup_width = (area.width * 60 / 100).max(40).min(area.width - 4);
-                    let popup_height = 7u16;
-                    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
-                    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
-                    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
-
-                    // Clear the area behind the popup
-                    f.render_widget(Clear, popup_area);
-
-                    // Create popup content
-                    let type_str = if target.is_dir { "directory" } else { "file" };
-                    let location = if matches!(
-                        target.backend.backend_type(),
-                        crate::fs::BackendType::Local
-                    ) {
-                        "LOCAL"
-                    } else {
-                        "REMOTE"
-                    };
-
-                    let text = vec![
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled(
-                                "Delete ",
-                                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::raw(type_str),
-                            Span::raw(" ("),
-                            Span::styled(location, Style::default().fg(Color::Yellow)),
-                            Span::raw("):"),
-                        ]),
-                        Line::from(""),
-                        Line::from(vec![Span::styled(
-                            &target.display_path,
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        )]),
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled(
-                                "[Y]",
-                                Style::default()
-                                    .fg(Color::Green)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                            Span::raw(" Yes  "),
-                            Span::styled(
-                                "[N/Esc]",
-                                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::raw(" No"),
-                        ]),
-                    ];
-
-                    let popup = Paragraph::new(text)
-                        .block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .border_style(Style::default().fg(Color::Red))
-                                .title(" ⚠ Confirm Delete ")
-                                .title_style(
-                                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                                ),
-                        )
-                        .alignment(ratatui::layout::Alignment::Center)
-                        .wrap(Wrap { trim: true });
-
-                    f.render_widget(popup, popup_area);
+                    render_delete_confirm(f, target);
                 }
             }
 
             if show_progress {
                 if let Some(ref progress) = app.progress {
-                    use app::ProgressStage;
-
-                    // Calculate percent based on stage
-                    let (percent, label, color) = match progress.stage {
-                        ProgressStage::Counting => {
-                            // Indeterminate - show spinner-like animated bar
-                            let tick = (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis()
-                                / 200)
-                                % 100;
-                            (
-                                tick as u16,
-                                format!("📊 Counting files: {}...", progress.current_file),
-                                Color::Yellow,
-                            )
-                        }
-                        ProgressStage::Archiving => {
-                            let pct = if progress.total_files > 0 {
-                                (progress.files_done as f64 / progress.total_files as f64 * 100.0)
-                                    as u16
-                            } else {
-                                50
-                            };
-                            (
-                                pct,
-                                format!(
-                                    "📦 Archiving: {} ({}/{})",
-                                    progress.current_file,
-                                    progress.files_done,
-                                    progress.total_files
-                                ),
-                                Color::Blue,
-                            )
-                        }
-                        ProgressStage::Transferring => {
-                            let pct = if progress.total > 0 {
-                                (progress.current as f64 / progress.total as f64 * 100.0) as u16
-                            } else {
-                                // Indeterminate
-                                let tick = (std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis()
-                                    / 200)
-                                    % 100;
-                                tick as u16
-                            };
-                            (
-                                pct,
-                                format!("📤 Transferring: {}", progress.current_file),
-                                Color::Cyan,
-                            )
-                        }
-                        ProgressStage::Extracting => (
-                            90,
-                            format!("📂 Extracting: {}", progress.current_file),
-                            Color::Magenta,
-                        ),
-                        ProgressStage::Complete => (
-                            100,
-                            format!("✓ Complete: {}", progress.current_file),
-                            Color::Green,
-                        ),
-                    };
-
-                    let gauge = Gauge::default()
-                        .block(Block::default().borders(Borders::ALL).title("Progress"))
-                        .gauge_style(Style::default().fg(color).bg(Color::Black))
-                        .percent(percent.min(100))
-                        .label(label);
-
-                    f.render_widget(gauge, chunks[1]);
+                    render_progress_bar(f, chunks[1], progress);
                 }
-                render_status_bar(f, chunks[2], &app.message);
-                render_help_bar(f, chunks[3]);
+                render_status_bar(f, chunks[2], app);
+                render_help_bar(f, chunks[3], app);
             } else {
-                render_status_bar(f, chunks[1], &app.message);
-                render_help_bar(f, chunks[2]);
+                render_status_bar(f, chunks[1], app);
+                render_help_bar(f, chunks[2], app);
             }
         })?;
 

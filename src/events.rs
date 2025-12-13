@@ -30,7 +30,7 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.should_quit = true;
         }
-        KeyCode::F(10) => {
+        KeyCode::Char('q') => {
             app.should_quit = true;
         }
         KeyCode::Tab => {
@@ -52,6 +52,10 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
             // Copy operation
             handle_copy(app).await?;
         }
+        KeyCode::F(6) => {
+            // Move operation
+            handle_move(app).await?;
+        }
         KeyCode::F(2) => {
             // Show disk usage for current PVC
             handle_disk_usage(app).await?;
@@ -62,7 +66,7 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::F(7) => {
             // Create directory
-            app.message = "F7: Create directory - Not yet implemented".to_string();
+            handle_mkdir(app).await?;
         }
         KeyCode::F(8) => {
             // Delete
@@ -996,6 +1000,115 @@ async fn handle_disk_analyzer(app: &mut App, key: KeyEvent) -> Result<()> {
         _ => {}
     }
 
+    Ok(())
+}
+
+// ============================================================================
+// File Operation Handlers
+// ============================================================================
+
+/// Move file/directory from active pane to other pane (copy + delete).
+async fn handle_move(app: &mut App) -> Result<()> {
+    // Don't start new move if one is already running
+    if app.background_task.is_some() {
+        app.message = "Operation already in progress...".to_string();
+        return Ok(());
+    }
+
+    // Get source and destination panes
+    let (src_pane, dest_pane) = match app.active_pane {
+        crate::app::ActivePane::Left => (&app.left_pane, &app.right_pane),
+        crate::app::ActivePane::Right => (&app.right_pane, &app.left_pane),
+    };
+
+    if let Some(entry) = src_pane.selected_entry() {
+        // Skip ".."
+        if entry.name == ".." {
+            app.message = "Cannot move '..'".to_string();
+            return Ok(());
+        }
+        
+        let entry_name = entry.name.clone();
+        let entry_size = entry.size;
+        let entry_is_dir = entry.is_dir;
+        
+        // Compute paths
+        let src_path = if src_pane.path.ends_with('/') || src_pane.path.is_empty() {
+            format!("{}{}", src_pane.path, entry_name)
+        } else {
+            format!("{}/{}", src_pane.path, entry_name)
+        };
+        
+        let dest_path = if dest_pane.path.ends_with('/') || dest_pane.path.is_empty() {
+            format!("{}{}", dest_pane.path, entry_name)
+        } else {
+            format!("{}/{}", dest_pane.path, entry_name)
+        };
+        
+        let src_backend = src_pane.storage.clone();
+        let dest_backend = dest_pane.storage.clone();
+        
+        app.message = format!("🔄 Moving {}...", entry_name);
+        
+        let entry_name_clone = entry_name.clone();
+        let src_path_clone = src_path.clone();
+        
+        // Spawn move task (copy + delete)
+        let handle = tokio::spawn(async move {
+            // Copy first
+            crate::fs::copy::copy_between_backends(
+                src_backend.as_ref(),
+                &src_path,
+                dest_backend.as_ref(),
+                &dest_path,
+                None,
+            ).await?;
+            
+            // Then delete source
+            src_backend.delete(&src_path_clone).await?;
+            
+            Ok(format!("✓ Moved {} successfully", entry_name_clone))
+        });
+        
+        app.background_task = Some(handle);
+        
+        app.progress = Some(crate::app::Progress {
+            stage: crate::app::ProgressStage::Transferring,
+            current: 0,
+            total: entry_size,
+            current_file: entry_name,
+            files_done: 0,
+            total_files: if entry_is_dir { 0 } else { 1 },
+        });
+    } else {
+        app.message = "No entry selected".to_string();
+    }
+    Ok(())
+}
+
+/// Create a new directory in the active pane.
+async fn handle_mkdir(app: &mut App) -> Result<()> {
+    // For now, create a simple "NewFolder" directory
+    // A proper implementation would use a text input popup
+    let pane = app.active_pane_mut();
+    
+    let new_dir_name = "NewFolder";
+    let new_path = if pane.path.ends_with('/') || pane.path.is_empty() {
+        format!("{}{}", pane.path, new_dir_name)
+    } else {
+        format!("{}/{}", pane.path, new_dir_name)
+    };
+    
+    match pane.storage.create_dir(&new_path).await {
+        Ok(_) => {
+            app.message = format!("✓ Created directory: {}", new_dir_name);
+            app.refresh_active_pane().await?;
+        }
+        Err(e) => {
+            app.message = format!("❌ Failed to create directory: {}", e);
+        }
+    }
+    
     Ok(())
 }
 

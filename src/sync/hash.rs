@@ -43,16 +43,38 @@ impl FileHash {
 
 /// Hash bytes using BLAKE3.
 pub fn hash_bytes(data: &[u8]) -> String {
-    let hash = blake3::hash(data);
-    hash.to_hex().to_string()
+    // Use parallel hashing for data > 128KB
+    if data.len() > 128 * 1024 {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update_rayon(data);
+        hasher.finalize().to_hex().to_string()
+    } else {
+        blake3::hash(data).to_hex().to_string()
+    }
 }
 
-/// Hash a file using BLAKE3.
+/// Hash a file using BLAKE3 with multicore support for large files.
 pub fn hash_file(path: &Path) -> Result<FileHash> {
-    let mut file = std::fs::File::open(path)?;
+    let file = std::fs::File::open(path)?;
     let metadata = file.metadata()?;
     let size = metadata.len();
     
+    // Use memory-mapped parallel hashing for large files (> 1MB)
+    if size > 1024 * 1024 {
+        let data = std::fs::read(path)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update_rayon(&data);
+        let hash = hasher.finalize();
+        
+        return Ok(FileHash::new(
+            HashType::Blake3,
+            hash.to_hex().to_string(),
+            size,
+        ));
+    }
+    
+    // Standard sequential hashing for smaller files
+    let mut file = file;
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0u8; 65536]; // 64KB buffer
     

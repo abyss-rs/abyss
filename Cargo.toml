@@ -20,16 +20,17 @@ opendal = { version = "0.55", features = ["services-s3", "services-gcs"] }
 async-trait = "0.1"
 
 # Sync & Replication (Phase 3)
-notify = "6.1"           # File watching (inotify/FSEvents/ReadDirectoryChanges)
+notify = "8.2"           # File watching (inotify/FSEvents/ReadDirectoryChanges)
 globset = "0.4"          # Pattern matching for excludes
-flate2 = "1.0"           # Gzip compression
+flate2 = "1.1"           # Gzip compression
 zstd = "0.13"            # Zstd compression
-blake3 = "1.5"           # Fast hashing
-governor = "0.6"         # Rate limiting / bandwidth throttling
+blake3 = { version = "1.8", features = ["rayon"] }  # Fast multicore hashing
+rayon = "1.11"           # Parallel processing
+governor = "0.10"        # Rate limiting / bandwidth throttling
 nonzero_ext = "0.3"      # NonZero utilities for governor
 
 [dev-dependencies]
-tempfile = "3.19"
+tempfile = "3.23"
 
 [profile.release]
 opt-level = 3
