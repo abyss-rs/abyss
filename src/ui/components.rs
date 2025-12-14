@@ -170,12 +170,12 @@ fn build_help_text(app: &App) -> Vec<Span<'static>> {
 }
 
 /// Render file editor.
-pub fn render_file_editor(f: &mut Frame, editor: &crate::app::TextEditor, area: Rect) {
-    // Clear the area first to prevent artifacts (panes bleeding through)
+pub fn render_file_editor(f: &mut Frame, editor: &mut crate::app::TextEditor, area: Rect) {
+    // Clear the entire area first
     f.render_widget(Clear, area);
     
     // Editor styling
-    let bg_color = Color::Black; // Standard black for best compatibility
+    let bg_color = Color::Black;
     let border_style = if editor.modified {
          Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
@@ -187,64 +187,76 @@ pub fn render_file_editor(f: &mut Frame, editor: &crate::app::TextEditor, area: 
     } else {
         format!(" Editing: {} ", editor.filename)
     };
-    
+
+    // Get file extension for syntax highlighting
+    let extension = std::path::Path::new(&editor.filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt");
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title)
         .style(Style::default().bg(bg_color));
     
-    f.render_widget(block.clone(), area);
-    
-    // Inner area for text
     let inner_area = block.inner(area);
     
-    // Render lines
-    let visible_lines = inner_area.height as usize;
+    // Render the block (border) first
+    f.render_widget(block, area);
+    
+    // Calculate visible lines and store for event handler scroll logic
+    let visible_height = inner_area.height as usize;
+    editor.visible_height = visible_height;
+    
     let start_line = editor.scroll_offset;
-    let end_line = (start_line + visible_lines).min(editor.content.len());
-    
-    // Get file extension
-    let extension = std::path::Path::new(&editor.filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("txt");
+    let end_line = (start_line + visible_height).min(editor.content.len());
 
-    // Collect visible lines to highlight (with some context if possible, but line-by-line is safer for perf)
-    // Tree-sitter works best on full files. 
-    // OPTIMIZATION: For now, we highlight line-by-line using our compatibility wrapper. 
-    // This allows basic highlighting (keywords/strings) without parsing 10MB file on every scroll.
-    // However, multi-line comments may be broken. 
-    // User asked for "tree-sitter support", and line-by-line is acceptable for TUI responsiveness.
-    
+    // Render each line individually to its own row
     for (i, line_idx) in (start_line..end_line).enumerate() {
-        if i as u16 >= inner_area.height {
+        if i >= visible_height {
             break;
         }
         
         let line_content = &editor.content[line_idx];
+        // Replace tabs with spaces to avoid width calculation issues
+        let clean_content = line_content.replace('\t', "    ");
         
-        // Use highlight_line which calls tree-sitter on the single line
+        let highlighted = crate::ui::syntax::highlight_line(&clean_content, extension);
+        
+        let line_area = Rect::new(
+            inner_area.x,
+            inner_area.y + i as u16,
+            inner_area.width,
+            1,
+        );
+        
+        // Render this line
         f.render_widget(
-            Paragraph::new(crate::ui::syntax::highlight_line(line_content, extension)),
-            Rect::new(
-                inner_area.x,
-                inner_area.y + i as u16,
-                inner_area.width,
-                1,
-            ),
+            Paragraph::new(highlighted)
+                .style(Style::default().bg(bg_color)),
+            line_area,
         );
     }
     
     // Set cursor
     let cursor_y = editor.cursor_row as i32 - editor.scroll_offset as i32;
     if cursor_y >= 0 && cursor_y < inner_area.height as i32 {
+        // Also account for tab expansion in cursor position
+        let current_line = &editor.content[editor.cursor_row];
+        let chars_before_cursor: String = current_line.chars().take(editor.cursor_col).collect();
+        let visual_col = chars_before_cursor.replace('\t', "    ").len();
+        
         f.set_cursor_position(
-            (inner_area.x + editor.cursor_col as u16,
+            (inner_area.x + visual_col as u16,
             inner_area.y + cursor_y as u16)
         );
     }
 }
+
+
+
+
 
 /// Render the status bar with message and sync status.
 pub fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {

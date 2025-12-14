@@ -83,8 +83,11 @@ async fn run_app<B: ratatui::backend::Backend>(
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(chunks[0]);
 
-            app.left_pane.render(f, panes[0]);
-            app.right_pane.render(f, panes[1]);
+            // Only render panes if NOT in editor mode - otherwise editor covers this area
+            if !matches!(app.mode, app::AppMode::EditFile | app::AppMode::EditorSearch) {
+                app.left_pane.render(f, panes[0]);
+                app.right_pane.render(f, panes[1]);
+            }
 
             // Render delete confirmation popup if in ConfirmDelete mode
             if matches!(app.mode, app::AppMode::ConfirmDelete) {
@@ -123,7 +126,7 @@ async fn run_app<B: ratatui::backend::Backend>(
             // Render file editor
             if matches!(app.mode, app::AppMode::EditFile | app::AppMode::EditorSearch) {
                 // Use main content area (chunks[0]) to avoid overlapping status/help bar
-                ui::components::render_file_editor(f, &app.editor, chunks[0]);
+                ui::components::render_file_editor(f, &mut app.editor, chunks[0]);
             }
 
             if matches!(app.mode, app::AppMode::EditorSearch) {

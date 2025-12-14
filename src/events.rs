@@ -1722,6 +1722,7 @@ async fn handle_confirm_large_load_mode(app: &mut App, key: KeyEvent) -> Result<
                                      filename: app.view_file_path.rsplit('/').next().unwrap_or("").to_string(), // Approximate default
                                      modified: false,
                                      cut_buffer: None,
+                                     visible_height: 0,
                                  };
                                  app.mode = AppMode::EditFile;
                                  app.message = format!("Editing: {} - ^O: WriteOut, ^X: Exit, ^K: Cut, ^U: Uncut", app.editor.filename);
@@ -1868,6 +1869,7 @@ async fn handle_edit_file_start(app: &mut App) -> Result<()> {
                     filename: entry.name.clone(),
                     modified: false,
                     cut_buffer: None,
+                    visible_height: 0,
                 };
                 
                 app.mode = AppMode::EditFile;
@@ -1974,11 +1976,12 @@ async fn handle_edit_file_mode(app: &mut App, key: KeyEvent) -> Result<()> {
         _ => {}
     }
     
-    // Adjust scroll logic
+    // Adjust scroll logic - use visible_height if available, fallback to 20
+    let visible = if app.editor.visible_height > 0 { app.editor.visible_height } else { 20 };
     if app.editor.cursor_row < app.editor.scroll_offset {
         app.editor.scroll_offset = app.editor.cursor_row;
-    } else if app.editor.cursor_row >= app.editor.scroll_offset + 20 { // Assuming 20 lines visible
-         app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(19);
+    } else if app.editor.cursor_row >= app.editor.scroll_offset + visible {
+         app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(visible - 1);
     }
     
     Ok(())
@@ -2015,8 +2018,9 @@ async fn handle_editor_search_mode(app: &mut App, key: KeyEvent) -> Result<()> {
                     app.editor.cursor_col = check_col + idx;
                     found = true;
                     // Adjust scroll
-                    if app.editor.cursor_row >= app.editor.scroll_offset + 20 {
-                        app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(10);
+                    let visible = if app.editor.visible_height > 0 { app.editor.visible_height } else { 20 };
+                    if app.editor.cursor_row >= app.editor.scroll_offset + visible {
+                        app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(visible / 2);
                     }
                     break;
                 }
@@ -2032,10 +2036,11 @@ async fn handle_editor_search_mode(app: &mut App, key: KeyEvent) -> Result<()> {
                         app.editor.cursor_col = idx;
                         found = true;
                         // Adjust scroll
+                        let visible = if app.editor.visible_height > 0 { app.editor.visible_height } else { 20 };
                         if app.editor.cursor_row < app.editor.scroll_offset {
                              app.editor.scroll_offset = i;
-                        } else if app.editor.cursor_row >= app.editor.scroll_offset + 20 {
-                             app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(10);
+                        } else if app.editor.cursor_row >= app.editor.scroll_offset + visible {
+                             app.editor.scroll_offset = app.editor.cursor_row.saturating_sub(visible / 2);
                         }
                         break;
                      }

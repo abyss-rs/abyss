@@ -126,7 +126,10 @@ pub struct TextEditor {
     pub filename: String,
     pub modified: bool,
     pub cut_buffer: Option<String>,
+    /// Visible height of the editor area (set by renderer, used for scroll calculations)
+    pub visible_height: usize,
 }
+
 
 impl TextEditor {
     pub fn new() -> Self {
@@ -492,6 +495,17 @@ impl App {
         let active_pane = self.active_pane;
         let pane = self.active_pane_mut();
         
+        // Special case: don't go above "/" if already there
+        if pane.path == "/" || pane.path.is_empty() {
+            self.message = "Already at root".to_string();
+            return Ok(());
+        }
+        
+        // Remember the current directory name to select it after refresh
+        let current_dir_name = std::path::Path::new(&pane.path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string());
+        
         let parent = if pane.path.len() > 1 {
              // Simple string parent logic for VFS
              // Assumes '/' separator for all backends including Local (adapter handles translation)
@@ -502,15 +516,24 @@ impl App {
             "/".to_string()
         };
         
-        // Special case: don't go above "/" if already there
-        if pane.path == "/" || pane.path.is_empty() {
-            self.message = "Already at root".to_string();
-            return Ok(());
-        }
-        
         pane.path = parent;
         
+        // Refresh the pane
         self.refresh_pane(active_pane).await?;
+        
+        // After refresh, find and select the directory we came from
+        if let Some(dir_name) = current_dir_name {
+            let pane = match active_pane {
+                ActivePane::Left => &mut self.left_pane,
+                ActivePane::Right => &mut self.right_pane,
+            };
+            
+            // Find the index of the directory we came from
+            if let Some(idx) = pane.entries.iter().position(|e| e.name == dir_name) {
+                pane.state.select(Some(idx));
+            }
+        }
+        
         Ok(())
     }
 }
