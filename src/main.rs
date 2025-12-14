@@ -101,14 +101,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                 ui::components::render_rename_popup(f, &app.text_input);
             }
             
-            // Render file viewer
-            if matches!(app.mode, app::AppMode::ViewFile) {
-                let filename = app.active_pane().selected_entry()
-                    .map(|e| e.name.clone())
-                    .unwrap_or_default();
-                // Use main content area (chunks[0])
-                ui::components::render_file_viewer(f, &app.view_content, app.view_scroll, &filename, chunks[0]);
-            }
+            // ViewFile mode removed - F3 now uses editor in readonly mode
             
             // Render search popup
             if matches!(app.mode, app::AppMode::Search) {

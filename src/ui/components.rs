@@ -174,16 +174,20 @@ pub fn render_file_editor(f: &mut Frame, editor: &mut crate::app::TextEditor, ar
     // Clear the entire area first
     f.render_widget(Clear, area);
     
-    // Editor styling
+    // Editor styling - different colors for edit vs readonly mode
     let bg_color = Color::Black;
     let border_style = if editor.modified {
          Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else if editor.readonly {
+         Style::default().fg(Color::Cyan)  // Readonly mode: cyan border
     } else {
-         Style::default().fg(Color::Green)
+         Style::default().fg(Color::Green)  // Edit mode: green border
     };
     
     let title = if editor.modified {
         format!(" Editing: {} (Modified) ", editor.filename)
+    } else if editor.readonly {
+        format!(" Viewing: {} (readonly) ", editor.filename)
     } else {
         format!(" Editing: {} ", editor.filename)
     };

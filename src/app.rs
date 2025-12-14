@@ -128,6 +128,8 @@ pub struct TextEditor {
     pub cut_buffer: Option<String>,
     /// Visible height of the editor area (set by renderer, used for scroll calculations)
     pub visible_height: usize,
+    /// If true, the editor is in readonly mode (viewing only, no edits allowed)
+    pub readonly: bool,
 }
 
 

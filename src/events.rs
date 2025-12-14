@@ -1536,10 +1536,15 @@ async fn handle_rename_mode(app: &mut App, key: KeyEvent) -> Result<()> {
 // View File Handlers
 // ============================================================================
 
-/// View selected file contents.
+/// View selected file contents (uses editor in readonly mode).
 async fn handle_view_file(app: &mut App) -> Result<()> {
     if let Some(entry) = app.active_pane().selected_entry().cloned() {
-        if entry.name == ".." || entry.is_dir {
+        if entry.name == ".." {
+            app.message = "Cannot view '..'".to_string();
+            return Ok(());
+        }
+        
+        if entry.is_dir {
             app.message = "Cannot view directory".to_string();
             return Ok(());
         }
@@ -1553,40 +1558,38 @@ async fn handle_view_file(app: &mut App) -> Result<()> {
         
         let backend = pane.storage.clone();
         
-        // Size check
-        let is_remote = matches!(backend.backend_type(), crate::fs::BackendType::S3 { .. } | crate::fs::BackendType::Gcs { .. }); // Gcs might have fields too
-        // Wait, Gcs variant def? Error said `Gcs`. I'll assume fields usually.
-        // Actually error said `Gcs` variant, didn't complain about struct for GCS, but complained `GCS` not found.
-        // I will check backend.rs if needed, but safe bet is wildcard or correct naming.
-        // Error for S3 said "not a unit struct", so it has fields.
-        // If Gcs has fields, I need { .. }.
-        let size = entry.size;
+        // Size check for remote files
+        let is_remote = matches!(backend.backend_type(), crate::fs::BackendType::S3 { .. } | crate::fs::BackendType::Gcs { .. });
         
-        // Remote > 40MB -> Confirm
-        if is_remote && size > 40 * 1024 * 1024 {
-             app.pending_large_action = Some(LargeFileAction::View);
-             app.view_file_path = path;
-             app.view_file_size = size;
-             app.mode = AppMode::ConfirmLargeLoad;
-             app.message = format!("Remote file is large ({} MB). View? (y/n)", size / 1024 / 1024);
-             return Ok(());
+        if is_remote && entry.size > 40 * 1024 * 1024 {
+            app.pending_large_action = Some(LargeFileAction::View);
+            app.view_file_path = path;
+            app.view_file_size = entry.size;
+            app.mode = AppMode::ConfirmLargeLoad;
+            app.message = format!("Remote file is large ({} MB). View? (y/n)", entry.size / 1024 / 1024);
+            return Ok(());
         }
         
-        // Streaming for > 10MB (Local or Remote)
-        if size > 1 * 1024 * 1024 {
-             return load_view_chunk(app, backend, &path, 0, size).await;
-        }
-
+        // Read file content and load into editor as readonly
         match backend.read_bytes(&path).await {
             Ok(data) => {
-                let content = String::from_utf8_lossy(&data);
-                app.view_content = content.lines().map(|s| s.to_string()).collect();
-                app.view_scroll = 0;
-                app.view_file_size = size;
-                app.view_file_offset = 0;
-                app.view_file_path = path;
-                app.mode = AppMode::ViewFile;
-                app.message = format!("Viewing: {} - q/Esc to close", entry.name);
+                let content = String::from_utf8_lossy(&data).to_string();
+                let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                
+                app.editor = crate::app::TextEditor {
+                    content: if lines.is_empty() { vec![String::new()] } else { lines },
+                    cursor_row: 0,
+                    cursor_col: 0,
+                    scroll_offset: 0,
+                    filename: entry.name.clone(),
+                    modified: false,
+                    cut_buffer: None,
+                    visible_height: 0,
+                    readonly: true,  // View mode is readonly
+                };
+                
+                app.mode = AppMode::EditFile;  // Use same mode, but readonly flag prevents edits
+                app.message = format!("Viewing: {} (readonly) - q/Esc to close", entry.name);
             }
             Err(e) => {
                 app.message = format!("Failed to read file: {}", e);
@@ -1723,6 +1726,7 @@ async fn handle_confirm_large_load_mode(app: &mut App, key: KeyEvent) -> Result<
                                      modified: false,
                                      cut_buffer: None,
                                      visible_height: 0,
+                                     readonly: false,
                                  };
                                  app.mode = AppMode::EditFile;
                                  app.message = format!("Editing: {} - ^O: WriteOut, ^X: Exit, ^K: Cut, ^U: Uncut", app.editor.filename);
@@ -1870,6 +1874,7 @@ async fn handle_edit_file_start(app: &mut App) -> Result<()> {
                     modified: false,
                     cut_buffer: None,
                     visible_height: 0,
+                    readonly: false,
                 };
                 
                 app.mode = AppMode::EditFile;
@@ -1887,52 +1892,73 @@ async fn handle_edit_file_start(app: &mut App) -> Result<()> {
 
 /// Handle edit file mode input.
 async fn handle_edit_file_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    let readonly = app.editor.readonly;
+    
     match key.code {
-        // Exit: Ctrl+X or Ctrl+Q or Esc
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        // Exit: Ctrl+X or Ctrl+Q or Esc (or just q/Esc in readonly mode)
+        KeyCode::Esc => {
             if app.editor.modified {
-                // TODO: Confirm discard changes? For now just exit
                 app.message = "Changes discarded".to_string();
             }
             app.mode = AppMode::Normal;
         }
-        // Save: Ctrl+O (Write Out) or Ctrl+S
+        KeyCode::Char('q') if readonly || key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.editor.modified {
+                app.message = "Changes discarded".to_string();
+            }
+            app.mode = AppMode::Normal;
+        }
+        KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.editor.modified {
+                app.message = "Changes discarded".to_string();
+            }
+            app.mode = AppMode::Normal;
+        }
+        // Save: Ctrl+O (Write Out) or Ctrl+S - blocked in readonly mode
         KeyCode::Char('o') | KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // Save file
-            let content = app.editor.content.join("\n");
-            let pane = app.active_pane();
-            let path = if pane.path.ends_with('/') || pane.path.is_empty() {
-                format!("{}{}", pane.path, app.editor.filename)
+            if readonly {
+                app.message = "Cannot save: file is readonly".to_string();
             } else {
-                format!("{}/{}", pane.path, app.editor.filename)
-            };
-            
-            let backend = pane.storage.clone();
-            match backend.write_bytes(&path, content.as_bytes().to_vec()).await {
-                Ok(_) => {
-                    app.editor.modified = false;
-                    app.message = format!("Saved '{}'", app.editor.filename);
-                    app.refresh_active_pane().await?;
-                }
-                Err(e) => {
-                    app.message = format!("Save failed: {}", e);
+                let content = app.editor.content.join("\n");
+                let pane = app.active_pane();
+                let path = if pane.path.ends_with('/') || pane.path.is_empty() {
+                    format!("{}{}", pane.path, app.editor.filename)
+                } else {
+                    format!("{}/{}", pane.path, app.editor.filename)
+                };
+                
+                let backend = pane.storage.clone();
+                match backend.write_bytes(&path, content.as_bytes().to_vec()).await {
+                    Ok(_) => {
+                        app.editor.modified = false;
+                        app.message = format!("Saved '{}'", app.editor.filename);
+                        app.refresh_active_pane().await?;
+                    }
+                    Err(e) => {
+                        app.message = format!("Save failed: {}", e);
+                    }
                 }
             }
         }
-        // Cut Line: Ctrl+K
+        // Cut Line: Ctrl+K - blocked in readonly mode
         KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.editor.cut_line();
+            if !readonly {
+                app.editor.cut_line();
+            }
         }
-        // Uncut (Paste) Line: Ctrl+U
+        // Uncut (Paste) Line: Ctrl+U - blocked in readonly mode
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.editor.uncut_line();
+            if !readonly {
+                app.editor.uncut_line();
+            }
         }
-        // Search: Ctrl+W
+        // Search: Ctrl+W - allowed in readonly mode
         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.mode = AppMode::EditorSearch;
             app.text_input.clear();
             app.message = "Search (Where Is): ".to_string();
         }
+        // Navigation - always allowed
         KeyCode::Up => {
             if app.editor.cursor_row > 0 {
                 app.editor.cursor_row -= 1;
@@ -1970,9 +1996,30 @@ async fn handle_edit_file_mode(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Home => app.editor.cursor_col = 0,
         KeyCode::End => app.editor.cursor_col = app.editor.content[app.editor.cursor_row].len(),
-        KeyCode::Backspace => app.editor.delete_back(),
-        KeyCode::Enter => app.editor.insert_newline(),
-        KeyCode::Char(c) => app.editor.insert_char(c),
+        KeyCode::PageUp => {
+            let visible = if app.editor.visible_height > 0 { app.editor.visible_height } else { 20 };
+            app.editor.cursor_row = app.editor.cursor_row.saturating_sub(visible);
+        }
+        KeyCode::PageDown => {
+            let visible = if app.editor.visible_height > 0 { app.editor.visible_height } else { 20 };
+            app.editor.cursor_row = (app.editor.cursor_row + visible).min(app.editor.content.len().saturating_sub(1));
+        }
+        // Editing operations - blocked in readonly mode
+        KeyCode::Backspace => {
+            if !readonly {
+                app.editor.delete_back();
+            }
+        }
+        KeyCode::Enter => {
+            if !readonly {
+                app.editor.insert_newline();
+            }
+        }
+        KeyCode::Char(c) => {
+            if !readonly {
+                app.editor.insert_char(c);
+            }
+        }
         _ => {}
     }
     
