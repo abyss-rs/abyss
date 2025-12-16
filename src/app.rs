@@ -83,6 +83,8 @@ pub struct App {
     pub right_pane: Pane,
     pub active_pane: ActivePane,
     pub message: String,
+    /// Timestamp when the message was set (for auto-clear)
+    pub message_time: Option<std::time::Instant>,
     pub k8s_client: Option<K8sClient>,
     pub storage_manager: Option<StorageManager>,
     pub remote_fs: Option<RemoteFs>,
@@ -329,6 +331,7 @@ impl App {
             right_pane,
             active_pane: ActivePane::Left,
             message: welcome_msg,
+            message_time: Some(std::time::Instant::now()),
             k8s_client,
             storage_manager,
             remote_fs,
@@ -423,6 +426,39 @@ impl App {
             ActivePane::Left => &self.left_pane,
             ActivePane::Right => &self.right_pane,
         }
+    }
+
+    /// Set a message with timestamp for auto-clear
+    pub fn set_message(&mut self, msg: impl Into<String>) {
+        self.message = msg.into();
+        self.message_time = Some(std::time::Instant::now());
+    }
+
+    /// Clear message if it's been shown for more than 7 seconds
+    pub fn clear_expired_message(&mut self) {
+        if let Some(time) = self.message_time {
+            if time.elapsed() > std::time::Duration::from_secs(7) {
+                self.message.clear();
+                self.message_time = None;
+            }
+        }
+    }
+
+    /// Get the status bar message, including full filename if truncated
+    pub fn get_status_message(&self) -> String {
+        // If we have a selected entry with a long name, show it in the status
+        let pane = self.active_pane();
+        if let Some(entry) = pane.selected_entry() {
+            // Check if name would be truncated (roughly >30 chars for typical terminal)
+            if entry.name.len() > 35 {
+                if self.message.is_empty() {
+                    return entry.name.clone();
+                } else {
+                    return format!("{} | {}", entry.name, self.message);
+                }
+            }
+        }
+        self.message.clone()
     }
 
     /// Poll background task for completion (non-blocking)

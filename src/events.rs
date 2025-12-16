@@ -1136,21 +1136,15 @@ async fn handle_move(app: &mut App) -> Result<()> {
         app.message = format!("🔄 Moving {}...", entry_name);
         
         let entry_name_clone = entry_name.clone();
-        let src_path_clone = src_path.clone();
         
-        // Spawn move task (copy + delete)
+        // Spawn move task
         let handle = tokio::spawn(async move {
-            // Copy first
-            crate::fs::copy::copy_between_backends(
+            crate::fs::copy::move_between_backends(
                 src_backend.as_ref(),
                 &src_path,
                 dest_backend.as_ref(),
                 &dest_path,
-                None,
             ).await?;
-            
-            // Then delete source
-            src_backend.delete(&src_path_clone).await?;
             
             Ok(format!("✓ Moved {} successfully", entry_name_clone))
         });

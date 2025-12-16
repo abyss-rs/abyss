@@ -275,7 +275,9 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         SyncStatus::Error { message } => format!(" │ ❌ {}", truncate_path(message, 30)),
     };
     
-    let text = format!("{}{}", app.message, sync_indicator);
+    // Use get_status_message which includes full filename for truncated entries
+    let status_msg = app.get_status_message();
+    let text = format!("{}{}", status_msg, sync_indicator);
     
     let status = Paragraph::new(text)
         .style(Style::default().bg(Color::Blue).fg(Color::White));

@@ -143,6 +143,9 @@ async fn run_app<B: ratatui::backend::Backend>(
             }
         })?;
 
+        // Clear expired messages (after 7 seconds)
+        app.clear_expired_message();
+
         // Poll background tasks for progress updates
         app.poll_background_task().await;
 
