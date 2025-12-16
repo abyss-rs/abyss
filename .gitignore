@@ -1,4 +1,5 @@
 /target/
+hash-rs/
 Cargo.lock
 .DS_Store
 *.swp
