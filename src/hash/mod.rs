@@ -18,7 +18,8 @@ pub use error::HashUtilityError;
 pub use hash::{HashComputer, HashRegistry, HashResult, AlgorithmInfo, Hasher};
 pub use scan::{ScanEngine, ScanStats};
 pub use verify::{VerifyEngine, VerifyReport, Mismatch};
-pub use benchmark::{BenchmarkEngine, BenchmarkResult};
-pub use database::{DatabaseHandler, DatabaseFormat};
+pub use benchmark::{BenchmarkEngine, BenchmarkResult, generate_test_data, calculate_throughput};
+pub use database::{DatabaseHandler, DatabaseFormat, DatabaseEntry};
 pub use compare::{CompareEngine, CompareReport, ChangedFile, DuplicateGroup};
 pub use dedup::{DedupEngine, DedupReport, DedupStats};
+

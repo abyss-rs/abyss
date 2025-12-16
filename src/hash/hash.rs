@@ -459,7 +459,7 @@ pub struct HashResult {
 
 /// Hash computer with streaming I/O
 pub struct HashComputer {
-    buffer_size: usize,
+    pub buffer_size: usize,
 }
 
 // Constants for fast mode sampling

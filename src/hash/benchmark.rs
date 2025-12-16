@@ -53,7 +53,7 @@ impl BenchmarkEngine {
     }
     
     /// Benchmark a single algorithm
-    fn benchmark_algorithm(
+    pub fn benchmark_algorithm(
         &self,
         algorithm: &str,
         test_data: &[u8],
@@ -112,7 +112,7 @@ impl Default for BenchmarkEngine {
 }
 
 /// Generate test data of specified size
-fn generate_test_data(size_bytes: usize) -> Vec<u8> {
+pub fn generate_test_data(size_bytes: usize) -> Vec<u8> {
     // Use a simple pattern to generate test data
     // This is faster than random data and sufficient for benchmarking
     let pattern = b"The quick brown fox jumps over the lazy dog. ";
@@ -133,7 +133,7 @@ fn generate_test_data(size_bytes: usize) -> Vec<u8> {
 }
 
 /// Calculate throughput in MB/s
-fn calculate_throughput(data_size_mb: usize, duration: Duration) -> f64 {
+pub fn calculate_throughput(data_size_mb: usize, duration: Duration) -> f64 {
     let seconds = duration.as_secs_f64();
     if seconds > 0.0 {
         data_size_mb as f64 / seconds
