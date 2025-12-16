@@ -20,6 +20,7 @@ pub enum AppMode {
     EditFile,            // Edit file contents (nano-like)
     ConfirmLargeLoad,    // Confirm loading large remote file
     EditorSearch,        // Search text inside editor
+    HashMenu,            // Hash operations menu (scan, verify, dedup, etc.)
 }
 
 #[derive(Debug, Clone, PartialEq)]

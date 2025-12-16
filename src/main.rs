@@ -1,9 +1,10 @@
-mod app;
-mod events;
-mod fs;
-mod k8s;
-mod sync;
-mod ui;
+use abyss::app;
+use abyss::events;
+use abyss::fs;
+use abyss::hash;
+use abyss::k8s;
+use abyss::sync;
+use abyss::ui;
 
 use anyhow::Result;
 use crossterm::{

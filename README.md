@@ -58,6 +58,19 @@ cargo build --release
 | Ctrl+Y | Execute sync now (when sync enabled) |
 | Ctrl+D | Dry-run sync (preview changes) |
 
+### Hash Operations
+| Key | Action |
+|-----|--------|
+| Ctrl+H | Open hash menu |
+
+Hash menu options:
+- **Scan** - Generate hash database (hashes.txt) for current directory
+- **Verify** - Check files against existing hash database
+- **Dedup** - Find duplicate files by content
+- **Compare** - Compare two hash databases
+- **Benchmark** - Test hash algorithm performance
+- **List Algorithms** - Show available algorithms (MD5, SHA1/2/3, BLAKE2/3, XXH3)
+
 ### Other
 | Key | Action |
 |-----|--------|

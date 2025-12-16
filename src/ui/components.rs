@@ -164,6 +164,16 @@ fn build_help_text(app: &App) -> Vec<Span<'static>> {
             spans.push(Span::styled(" Esc", key_style));
             spans.push(Span::styled(":Cancel", text_style));
         }
+        AppMode::HashMenu => {
+            spans.push(Span::styled("↑↓", key_style));
+            spans.push(Span::styled(":Navigate ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" Enter", key_style));
+            spans.push(Span::styled(":Select ", text_style));
+            spans.push(Span::styled("│", sep_style));
+            spans.push(Span::styled(" Esc", key_style));
+            spans.push(Span::styled(":Cancel", text_style));
+        }
     }
     
     spans

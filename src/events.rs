@@ -32,6 +32,7 @@ pub async fn handle_events(app: &mut App) -> Result<()> {
                 AppMode::EditFile => handle_edit_file_mode(app, key).await?,
                 AppMode::ConfirmLargeLoad => handle_confirm_large_load_mode(app, key).await?,
                 AppMode::EditorSearch => handle_editor_search_mode(app, key).await?,
+                AppMode::HashMenu => handle_hash_menu(app, key).await?,
             }
         }
     }
@@ -150,6 +151,63 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
                 crate::app::ActivePane::Right => "RIGHT",
             };
             app.message = format!("{} pane: Select storage type (↑/↓ to navigate, Enter to select, Esc to cancel)", pane_name);
+        }
+        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Hash operations menu
+            app.mode = AppMode::HashMenu;
+            
+            // Build hash menu options
+            let hash_options = vec![
+                crate::fs::types::FileEntry {
+                    name: "🔍 Scan - Generate hash database".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+                crate::fs::types::FileEntry {
+                    name: "✓ Verify - Check files against database".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+                crate::fs::types::FileEntry {
+                    name: "🔄 Dedup - Find duplicate files".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+                crate::fs::types::FileEntry {
+                    name: "⚖ Compare - Compare two hash databases".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+                crate::fs::types::FileEntry {
+                    name: "⏱ Benchmark - Test hash algorithm speeds".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+                crate::fs::types::FileEntry {
+                    name: "📋 List Algorithms - Show available hash algorithms".to_string(),
+                    size: 0,
+                    is_dir: true,
+                    modified: None,
+                    permissions: None,
+                },
+            ];
+            
+            let pane = app.active_pane_mut();
+            pane.entries = hash_options;
+            pane.state.select(Some(0));
+            pane.storage = std::sync::Arc::new(crate::fs::SelectingBackend);
+            
+            app.message = "Hash Menu: ↑/↓ navigate, Enter select, Esc cancel".to_string();
         }
         _ => {}
     }
@@ -492,6 +550,195 @@ async fn handle_configure_cloud(app: &mut App, key: KeyEvent) -> Result<()> {
         _ => {
             app.message = "Cloud configuration UI not yet implemented. Use environment variables.".to_string();
         }
+    }
+    Ok(())
+}
+
+/// Handle hash menu selection
+async fn handle_hash_menu(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            // Return to normal mode and restore directory
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            let pane = app.active_pane_mut();
+            pane.storage = std::sync::Arc::new(crate::fs::LocalBackend::new(std::path::PathBuf::from(&home)));
+            pane.path = home.clone();
+            app.refresh_active_pane().await?;
+            app.mode = AppMode::Normal;
+            app.message = "Hash menu cancelled".to_string();
+        }
+        KeyCode::Up => {
+            app.active_pane_mut().select_previous();
+        }
+        KeyCode::Down => {
+            app.active_pane_mut().select_next();
+        }
+        KeyCode::Enter => {
+            let entry_name = app.active_pane().selected_entry().map(|e| e.name.clone());
+            
+            if let Some(name) = entry_name {
+                // Restore pane to original state first
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                let pane = app.active_pane_mut();
+                let current_path = pane.path.clone();
+                pane.storage = std::sync::Arc::new(crate::fs::LocalBackend::new(std::path::PathBuf::from(&home)));
+                if current_path.is_empty() || current_path == "/" {
+                    pane.path = home.clone();
+                }
+                
+                app.mode = AppMode::Normal;
+                
+                if name.contains("Scan") {
+                    // Scan current directory and generate hash database
+                    let dir = app.active_pane().path.clone();
+                    let output_path = format!("{}/hashes.txt", dir);
+                    
+                    app.message = format!("Scanning {}...", dir);
+                    
+                    // Run scan in background
+                    let dir_clone = dir.clone();
+                    let output_clone = output_path.clone();
+                    let handle = tokio::task::spawn_blocking(move || {
+                        use crate::hash::ScanEngine;
+                        let engine = ScanEngine::with_parallel(true);
+                        
+                        let result = engine.scan_directory(
+                            std::path::Path::new(&dir_clone),
+                            "blake3",
+                            std::path::Path::new(&output_clone),
+                        );
+                        
+                        match result {
+                            Ok(stats) => Ok(format!("✓ Scanned {} files → {}", stats.files_processed, output_clone)),
+                            Err(e) => Err(anyhow::anyhow!("Scan failed: {}", e)),
+                        }
+                    });
+                    
+                    app.background_task = Some(tokio::spawn(async move {
+                        handle.await.map_err(|e| anyhow::anyhow!("{}", e))?
+                    }));
+                    
+                } else if name.contains("Verify") {
+                    // Verify files against database in current directory
+                    let dir = app.active_pane().path.clone();
+                    let db_path = format!("{}/hashes.txt", dir);
+                    
+                    if !std::path::Path::new(&db_path).exists() {
+                        app.message = format!("No database found at {}. Run Scan first.", db_path);
+                    } else {
+                        app.message = format!("Verifying {}...", dir);
+                        
+                        let dir_clone = dir.clone();
+                        let db_clone = db_path.clone();
+                        let handle = tokio::task::spawn_blocking(move || {
+                            use crate::hash::VerifyEngine;
+                            let engine = VerifyEngine::new();
+                            
+                            let result = engine.verify(
+                                std::path::Path::new(&db_clone),
+                                std::path::Path::new(&dir_clone),
+                            );
+                            
+                            match result {
+                                Ok(report) => {
+                                    let status = if report.mismatches.is_empty() && report.missing_files.is_empty() {
+                                        format!("✓ All {} files OK", report.matches)
+                                    } else {
+                                        format!("⚠ {} OK, {} changed, {} missing, {} new",
+                                            report.matches,
+                                            report.mismatches.len(),
+                                            report.missing_files.len(),
+                                            report.new_files.len())
+                                    };
+                                    Ok(status)
+                                }
+                                Err(e) => Err(anyhow::anyhow!("Verify failed: {}", e)),
+                            }
+                        });
+                        
+                        app.background_task = Some(tokio::spawn(async move {
+                            handle.await.map_err(|e| anyhow::anyhow!("{}", e))?
+                        }));
+                    }
+                    
+                } else if name.contains("Dedup") {
+                    // Find duplicate files in current directory
+                    let dir = app.active_pane().path.clone();
+                    
+                    app.message = format!("Finding duplicates in {}...", dir);
+                    
+                    let dir_clone = dir.clone();
+                    let handle = tokio::task::spawn_blocking(move || {
+                        use crate::hash::DedupEngine;
+                        let engine = DedupEngine::new().with_parallel(true);
+                        
+                        let result = engine.find_duplicates(
+                            std::path::Path::new(&dir_clone),
+                        );
+                        
+                        match result {
+                            Ok(report) => {
+                                let dup_count = report.duplicate_groups.len();
+                                let wasted = report.stats.wasted_space;
+                                if dup_count == 0 {
+                                    Ok("✓ No duplicates found".to_string())
+                                } else {
+                                    Ok(format!("Found {} duplicate groups ({} bytes wasted)", dup_count, wasted))
+                                }
+                            }
+                            Err(e) => Err(anyhow::anyhow!("Dedup failed: {}", e)),
+                        }
+                    });
+                    
+                    app.background_task = Some(tokio::spawn(async move {
+                        handle.await.map_err(|e| anyhow::anyhow!("{}", e))?
+                    }));
+                    
+                } else if name.contains("Benchmark") {
+                    // Run hash algorithm benchmarks
+                    app.message = "Running benchmarks (10MB data)...".to_string();
+                    
+                    let handle = tokio::task::spawn_blocking(move || {
+                        use crate::hash::BenchmarkEngine;
+                        let engine = BenchmarkEngine::new();
+                        
+                        let results = engine.run_benchmarks(10); // 10MB
+                        
+                        let results = results?;
+                        
+                        // Format results concisely
+                        let fastest = results.iter()
+                            .max_by(|a, b| a.throughput_mbps.partial_cmp(&b.throughput_mbps).unwrap());
+                        
+                        if let Some(best) = fastest {
+                            Ok(format!("✓ Fastest: {} ({:.0} MB/s)", best.algorithm, best.throughput_mbps))
+                        } else {
+                            Ok("Benchmark complete".to_string())
+                        }
+                    });
+                    
+                    app.background_task = Some(tokio::spawn(async move {
+                        handle.await.map_err(|e| anyhow::anyhow!("{}", e))?
+                    }));
+                    
+                } else if name.contains("Compare") {
+                    // Compare needs two database files - show message
+                    app.message = "Compare: Select two hash database files to compare. Use F3 to view.".to_string();
+                    
+                } else if name.contains("List Algorithms") {
+                    // List available hash algorithms
+                    use crate::hash::HashRegistry;
+                    let algorithms = HashRegistry::list_algorithms();
+                    let algo_list: Vec<String> = algorithms.iter()
+                        .map(|a| format!("{} ({}b)", a.name, a.output_bits))
+                        .collect();
+                    app.message = format!("Algorithms: {}", algo_list.join(", "));
+                }
+                
+                app.refresh_active_pane().await?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
