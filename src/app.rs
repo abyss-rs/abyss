@@ -1,5 +1,8 @@
 use anyhow::Result;
+use std::path::PathBuf;
+use std::sync::Arc;
 
+use crate::cleaner;
 use crate::fs::RemoteFs;
 use crate::k8s::{K8sClient, StorageManager};
 use crate::ui::Pane;
@@ -118,6 +121,29 @@ pub struct App {
     pub view_file_offset: u64,
     pub view_file_path: String,
     pub view_file_size: u64,
+    
+    // Cleaner / Disk Analyzer state
+    pub cleaner_tree: Option<cleaner::DirTree>,
+    pub cleaner_entries: Vec<cleaner::DirEntry>,
+    pub cleaner_selected: usize,
+    pub cleaner_scroll: usize,
+    pub cleaner_path: PathBuf,
+    pub cleaner_path_stack: Vec<PathBuf>,
+    pub cleaner_sort_mode: CleanerSortMode,
+    pub cleaner_confirm_delete: bool,
+    pub cleaner_confirm_clean: bool,
+    pub cleaner_status: Option<String>,
+    pub cleaner_status_time: Option<std::time::Instant>,
+    pub cleaner_total_size: u64,
+    pub cleaner_matcher: Option<Arc<cleaner::PatternMatcher>>,
+    pub cleaner_config: Option<Arc<cleaner::Config>>,
+    pub cleaner_progress: Option<Arc<cleaner::ScanProgress>>,
+    pub cleaner_scan_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub cleaner_scan_rx: Option<crossbeam_channel::Receiver<cleaner::DirTree>>,
+    
+    // Async cleaning state
+    pub cleaner_delete_stats: Option<Arc<cleaner::Stats>>,
+    pub cleaner_clean_rx: Option<crossbeam_channel::Receiver<anyhow::Result<()>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -295,6 +321,13 @@ pub enum ActivePane {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CleanerSortMode {
+    #[default]
+    Size,
+    Name,
+}
+
 impl App {
     pub async fn new() -> Result<Self> {
         // Try to initialize K8s, but don't fail if unavailable
@@ -355,6 +388,26 @@ impl App {
             view_file_offset: 0,
             view_file_path: String::new(),
             view_file_size: 0,
+            // Cleaner state
+            cleaner_tree: None,
+            cleaner_entries: Vec::new(),
+            cleaner_selected: 0,
+            cleaner_scroll: 0,
+            cleaner_path: PathBuf::from(&home_dir),
+            cleaner_path_stack: Vec::new(),
+            cleaner_sort_mode: CleanerSortMode::default(),
+            cleaner_confirm_delete: false,
+            cleaner_confirm_clean: false,
+            cleaner_status: None,
+            cleaner_status_time: None,
+            cleaner_total_size: 0,
+            cleaner_matcher: None,
+            cleaner_config: None,
+            cleaner_progress: None,
+            cleaner_scan_cancelled: None,
+            cleaner_scan_rx: None,
+            cleaner_delete_stats: None,
+            cleaner_clean_rx: None,
         };
 
         // Load initial directories for both panes

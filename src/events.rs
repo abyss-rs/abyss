@@ -4,6 +4,51 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crate::app::{App, AppMode, LargeFileAction};
 
 pub async fn handle_events(app: &mut App) -> Result<()> {
+    // Check for cleaner scan completion
+    if let Some(ref rx) = app.cleaner_scan_rx {
+        if let Ok(tree) = rx.try_recv() {
+            // Scan finished
+            app.cleaner_tree = Some(tree);
+            if let Some(ref tree) = app.cleaner_tree {
+                 app.cleaner_entries = tree.get_children(&app.cleaner_path);
+                 crate::events::cleaner_apply_sort(app);
+                 app.cleaner_total_size = app.cleaner_entries.iter().map(|e| e.size).sum();
+            }
+            
+            app.cleaner_scan_rx = None;
+            app.cleaner_progress = None;
+            app.cleaner_scan_cancelled = None;
+            app.message = format!("Scan complete: {}", app.cleaner_path.display());
+        }
+    }
+
+    // Check for cleaner cleaning completion
+    if let Some(ref rx) = app.cleaner_clean_rx {
+        if let Ok(result) = rx.try_recv() {
+            // Cleaning finished
+            match result {
+                Ok(_) => {
+                    if let Some(ref stats) = app.cleaner_delete_stats {
+                        app.cleaner_status = Some(format!(
+                            "Cleaned: {} dirs, {} files ({})",
+                            stats.directories(),
+                            stats.files(),
+                            humansize::format_size(stats.bytes(), humansize::BINARY)
+                        ));
+                        app.cleaner_status_time = Some(std::time::Instant::now());
+                    }
+                    crate::events::cleaner_rebuild_tree(app);
+                }
+                Err(e) => {
+                    app.message = format!("Error during cleaning: {}", e);
+                }
+            }
+            
+            app.cleaner_clean_rx = None;
+            app.cleaner_delete_stats = None;
+        }
+    }
+
     // Poll for sync progress updates (non-blocking)
     let _ = poll_sync_progress(app).await;
     
@@ -1072,267 +1117,329 @@ async fn handle_confirm_delete(app: &mut App, key: KeyEvent) -> Result<()> {
     Ok(())
 }
 
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
 
-    if bytes >= GB {
-        format!("{:.1}G", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1}M", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1}K", bytes as f64 / KB as f64)
-    } else {
-        format!("{}B", bytes)
-    }
-}
-
-async fn handle_disk_usage(app: &mut App) -> Result<()> {
-    use crate::app::ActivePane;
-
-    if app.active_pane != ActivePane::Right {
-        app.message = "F2: Switch to right pane to show PVC usage".to_string();
-        return Ok(());
-    }
-
-    if app.right_pane.path.is_empty() {
-        app.message = "F2: No PVC selected".to_string();
-        return Ok(());
-    }
-
-    let path_clone = app.right_pane.path.clone();
-    let parts: Vec<&str> = path_clone.split('/').collect();
-    if parts.len() >= 2 {
-        let namespace = parts[0];
-        let pvc = parts[1];
-
-        // Check if K8s is available
-        let Some(ref remote_fs) = app.remote_fs else {
-            app.message = "Kubernetes not available".to_string();
-            return Ok(());
-        };
-
-        app.message = "Loading disk usage...".to_string();
-
-        match remote_fs.get_disk_usage(namespace, pvc).await {
-            Ok(usage) => {
-                app.message = format!("📊 {} - {}", pvc, usage);
-            }
-            Err(e) => {
-                app.message = format!("Error getting disk usage: {}", e);
-            }
-        }
-    }
-
-    Ok(())
-}
 
 async fn handle_disk_analyzer_enter(app: &mut App) -> Result<()> {
-    use crate::app::ActivePane;
+    use crate::cleaner;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
-    if app.active_pane != ActivePane::Right {
-        app.message = "F3: Switch to right pane for disk analysis".to_string();
+    // Check if active pane is local filesystem
+    let pane = app.active_pane();
+    if !pane.storage.is_local() {
+        app.message = "Disk analyzer only available for local filesystem".to_string();
         return Ok(());
     }
 
-    if app.right_pane.path.is_empty() {
-        app.message = "F3: No PVC selected".to_string();
+    let current_path = std::path::PathBuf::from(&pane.path);
+    if !current_path.exists() || !current_path.is_dir() {
+        app.message = "Invalid directory for analysis".to_string();
         return Ok(());
     }
 
-    let path_clone = app.right_pane.path.clone();
-    let parts: Vec<&str> = path_clone.split('/').collect();
-    if parts.len() >= 3 {
-        let namespace = parts[0].to_string();
-        let pvc = parts[1].to_string();
-        let current_path = format!("/{}", parts[2..].join("/"));
+    // Set up cleaner config and matcher
+    let config = Arc::new(cleaner::Config::default());
+    let matcher = Arc::new(cleaner::PatternMatcher::new(Arc::clone(&config)));
 
-        // Check if K8s is available
-        let Some(ref remote_fs) = app.remote_fs else {
-            app.message = "Kubernetes not available".to_string();
-            return Ok(());
-        };
+    // Set up async scan content
+    let progress = Arc::new(cleaner::ScanProgress::new());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    
+    // Store in app for UI tracking
+    app.cleaner_progress = Some(Arc::clone(&progress));
+    app.cleaner_scan_cancelled = Some(Arc::clone(&cancelled));
+    app.cleaner_config = Some(Arc::clone(&config));
+    app.cleaner_matcher = Some(Arc::clone(&matcher));
+    app.cleaner_path = current_path.clone();
+    app.cleaner_path_stack = Vec::new();
+    app.cleaner_selected = 0;
+    app.cleaner_scroll = 0;
+    app.cleaner_tree = None; // Reset tree
+    app.cleaner_entries.clear();
+    app.cleaner_confirm_delete = false;
+    app.cleaner_confirm_clean = false;
+    app.cleaner_status = None;
+    app.cleaner_status_time = None;
 
-        app.message = "Analyzing disk usage...".to_string();
+    // Create channel for result
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    app.cleaner_scan_rx = Some(rx);
 
-        match remote_fs
-            .get_directory_sizes(&namespace, &pvc, &current_path)
-            .await
-        {
-            Ok(sizes) => {
-                // Convert to file entries with size info in name
-                app.right_pane.entries = sizes
-                    .iter()
-                    .map(|(name, size, is_dir)| crate::fs::types::FileEntry {
-                        name: format!("{:>8} {}", format_size(*size), name),
-                        size: *size,
-                        is_dir: *is_dir,
-                        modified: None,
-                        permissions: None,
-                    })
-                    .collect();
+    // Spawn scanning thread
+    let path_clone = current_path.clone();
+    std::thread::spawn(move || {
+        let tree = cleaner::DirTree::build_with_progress(&path_clone, &matcher, progress, cancelled);
+        let _ = tx.send(tree);
+    });
 
-                if !app.right_pane.entries.is_empty() {
-                    app.right_pane.state.select(Some(0));
-                }
-
-                app.mode = AppMode::DiskAnalyzer;
-                app.message = format!(
-                    "📊 Disk Analysis: {} - Esc to exit, Enter to drill down",
-                    current_path
-                );
-            }
-            Err(e) => {
-                app.message = format!("Error analyzing disk: {}", e);
-            }
-        }
-    }
+    app.mode = AppMode::DiskAnalyzer;
+    app.message = format!("Scanning {}...", current_path.display());
 
     Ok(())
+}
+
+/// Apply sort to cleaner entries
+fn cleaner_apply_sort(app: &mut App) {
+    use crate::cleaner::tree::{sort_by_name, sort_by_size};
+    match app.cleaner_sort_mode {
+        crate::app::CleanerSortMode::Size => sort_by_size(&mut app.cleaner_entries),
+        crate::app::CleanerSortMode::Name => sort_by_name(&mut app.cleaner_entries),
+    }
 }
 
 async fn handle_disk_analyzer(app: &mut App, key: KeyEvent) -> Result<()> {
-    // Check if K8s is available for disk analyzer operations
-    let remote_fs = match &app.remote_fs {
-        Some(fs) => fs.clone(),
-        None => {
-            app.message = "Kubernetes not available".to_string();
-            app.mode = AppMode::Normal;
-            return Ok(());
+    use crate::cleaner;
+    use std::sync::Arc;
+
+
+    // Clear expired status
+    if let Some(time) = app.cleaner_status_time {
+        if time.elapsed().as_secs() >= 10 {
+            app.cleaner_status = None;
+            app.cleaner_status_time = None;
         }
-    };
-    
+    }
+
     match key.code {
-        KeyCode::Esc => {
-            // Exit analyzer, return to normal mode and refresh
+        KeyCode::Esc | KeyCode::Char('q') => {
+            // Cancel scan if running
+            if let Some(ref cancelled) = app.cleaner_scan_cancelled {
+                cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            // Clear scan state
+            app.cleaner_progress = None;
+            app.cleaner_scan_cancelled = None;
+            app.cleaner_scan_rx = None;
+
+            // Exit analyzer, return to normal mode
             app.mode = AppMode::Normal;
-
-
-                app.refresh_pane(crate::app::ActivePane::Right).await?;
-
+            app.cleaner_tree = None;
+            app.cleaner_entries.clear();
             app.message = "Returned to file browser".to_string();
         }
-        KeyCode::Up => {
-            app.right_pane.select_previous();
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.cleaner_selected > 0 {
+                app.cleaner_selected -= 1;
+            }
+            app.cleaner_confirm_delete = false;
+            app.cleaner_confirm_clean = false;
         }
-        KeyCode::Down => {
-            app.right_pane.select_next();
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.cleaner_selected < app.cleaner_entries.len().saturating_sub(1) {
+                app.cleaner_selected += 1;
+            }
+            app.cleaner_confirm_delete = false;
+            app.cleaner_confirm_clean = false;
         }
-        KeyCode::Enter => {
+        KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
             // Drill down into selected directory
-            if let Some(entry) = app.right_pane.selected_entry() {
+            if let Some(entry) = app.cleaner_entries.get(app.cleaner_selected).cloned() {
                 if entry.is_dir {
-                    // Extract the actual name (after the size)
-                    let name = entry
-                        .name
-                        .split_whitespace()
-                        .last()
-                        .unwrap_or(&entry.name)
-                        .to_string();
-
-                    let path_clone = app.right_pane.path.clone();
-                    let parts: Vec<&str> = path_clone.split('/').collect();
-                    if parts.len() >= 3 {
-                        let namespace = parts[0].to_string();
-                        let pvc = parts[1].to_string();
-                        let current_path = format!("/{}", parts[2..].join("/"));
-                        let new_path = format!("{}/{}", current_path, name);
-
-                        app.right_pane.path = format!("{}/{}{}", namespace, pvc, new_path);
-
-                        match remote_fs
-                            .get_directory_sizes(&namespace, &pvc, &new_path)
-                            .await
-                        {
-                            Ok(sizes) => {
-                                app.right_pane.entries = sizes
-                                    .iter()
-                                    .map(|(n, size, is_dir)| crate::fs::types::FileEntry {
-                                        name: format!("{:>8} {}", format_size(*size), n),
-                                        size: *size,
-                                        is_dir: *is_dir,
-                                        modified: None,
-                                        permissions: None,
-                                    })
-                                    .collect();
-
-                                if !app.right_pane.entries.is_empty() {
-                                    app.right_pane.state.select(Some(0));
-                                }
-
-                                app.message =
-                                    format!("📊 Disk Analysis: {} - Esc to exit", new_path);
-                            }
-                            Err(e) => {
-                                app.message = format!("Error: {}", e);
-                            }
-                        }
+                    if entry.name == ".." {
+                        // Go back
+                        cleaner_go_back(app);
+                    } else {
+                        // Enter directory
+                        app.cleaner_path_stack.push(app.cleaner_path.clone());
+                        app.cleaner_path = entry.path.clone();
+                        cleaner_load_current_dir(app);
                     }
                 }
             }
         }
-        KeyCode::Backspace => {
-            // Go up one directory in analyzer
-            let path_clone = app.right_pane.path.clone();
-            let parts: Vec<&str> = path_clone.split('/').collect();
-            if parts.len() >= 3 {
-                let namespace = parts[0].to_string();
-                let pvc = parts[1].to_string();
-                let current_path = format!("/{}", parts[2..].join("/"));
-
-                if current_path != "/data" {
-                    let path = std::path::Path::new(&current_path);
-                    if let Some(parent) = path.parent() {
-                        let new_path = if parent.to_string_lossy().is_empty()
-                            || parent.to_string_lossy() == "/"
-                        {
-                            "/data".to_string()
-                        } else {
-                            parent.to_string_lossy().to_string()
-                        };
-
-                        app.right_pane.path = format!("{}/{}{}", namespace, pvc, new_path);
-
-                        match remote_fs
-                            .get_directory_sizes(&namespace, &pvc, &new_path)
-                            .await
-                        {
-                            Ok(sizes) => {
-                                app.right_pane.entries = sizes
-                                    .iter()
-                                    .map(|(n, size, is_dir)| crate::fs::types::FileEntry {
-                                        name: format!("{:>8} {}", format_size(*size), n),
-                                        size: *size,
-                                        is_dir: *is_dir,
-                                        modified: None,
-                                        permissions: None,
-                                    })
-                                    .collect();
-
-                                if !app.right_pane.entries.is_empty() {
-                                    app.right_pane.state.select(Some(0));
-                                }
-
-                                app.message = format!("📊 Disk Analysis: {}", new_path);
-                            }
-                            Err(e) => {
-                                app.message = format!("Error: {}", e);
-                            }
-                        }
+        KeyCode::Left | KeyCode::Backspace | KeyCode::Char('h') => {
+            cleaner_go_back(app);
+        }
+        KeyCode::Char('c') => {
+            // Toggle clean confirmation
+            app.cleaner_confirm_clean = !app.cleaner_confirm_clean;
+            app.cleaner_confirm_delete = false;
+        }
+        KeyCode::Char('d') => {
+            // Toggle delete confirmation
+            if !app.cleaner_entries.is_empty() {
+                if let Some(entry) = app.cleaner_entries.get(app.cleaner_selected) {
+                    if entry.name != ".." {
+                        app.cleaner_confirm_delete = !app.cleaner_confirm_delete;
+                        app.cleaner_confirm_clean = false;
                     }
-                } else {
-                    // At root, exit analyzer
-                    app.mode = AppMode::Normal;
-                    app.refresh_pane(crate::app::ActivePane::Right).await?;
-                    app.message = "Returned to file browser".to_string();
                 }
             }
+        }
+        KeyCode::Char('y') if app.cleaner_confirm_delete => {
+            // Delete selected item
+            if let Some(entry) = app.cleaner_entries.get(app.cleaner_selected).cloned() {
+                if entry.name != ".." {
+                    let result = if entry.is_dir {
+                        std::fs::remove_dir_all(&entry.path)
+                    } else {
+                        std::fs::remove_file(&entry.path)
+                    };
+
+                    match result {
+                        Ok(_) => {
+                            app.cleaner_status = Some(format!(
+                                "Deleted: {} ({})",
+                                entry.name,
+                                humansize::format_size(entry.size, humansize::BINARY)
+                            ));
+                            app.cleaner_status_time = Some(std::time::Instant::now());
+
+                            // Update tree in-memory
+                            if let Some(ref mut tree) = app.cleaner_tree {
+                                tree.delete_entry(&entry.path, entry.is_dir);
+                            }
+
+                            // Reload entries
+                            cleaner_load_current_dir_with_selection(app, Some(&entry.name));
+                        }
+                        Err(e) => {
+                            app.cleaner_status = Some(format!("Error: {}", e));
+                            app.cleaner_status_time = Some(std::time::Instant::now());
+                        }
+                    }
+                }
+            }
+            app.cleaner_confirm_delete = false;
+        }
+        KeyCode::Char('y') if app.cleaner_confirm_clean => {
+            // Clean current directory (async)
+            if let Some(config) = &app.cleaner_config {
+                let root = app.cleaner_path.clone();
+                let config_clone = Arc::clone(config);
+                
+                // Create shared stats
+                let stats = Arc::new(cleaner::Stats::new());
+                app.cleaner_delete_stats = Some(Arc::clone(&stats));
+
+                let (tx_res, rx_res) = crossbeam_channel::bounded(1);
+                app.cleaner_clean_rx = Some(rx_res);
+
+                let stats_clone = Arc::clone(&stats);
+                
+                std::thread::spawn(move || {
+                    let (tx_files, rx_files) = crossbeam_channel::unbounded();
+                    let scanner = cleaner::Scanner::new(root, num_cpus::get(), config_clone);
+
+                    // Run scanner
+                    let _scanned = scanner.scan(tx_files);
+
+                    // Process deletions (using delete stats)
+                    let deleter = cleaner::Deleter::new(stats_clone, false, false);
+                    deleter.process(rx_files);
+                    
+                    let _ = tx_res.send(Ok(()));
+                });
+                
+                app.message = "Cleaning in progress...".to_string();
+            }
+            app.cleaner_confirm_clean = false;
+        }
+        KeyCode::Char('n') => {
+            app.cleaner_confirm_delete = false;
+            app.cleaner_confirm_clean = false;
+        }
+        KeyCode::Char('s') => {
+            // Toggle sort
+            app.cleaner_sort_mode = match app.cleaner_sort_mode {
+                crate::app::CleanerSortMode::Size => crate::app::CleanerSortMode::Name,
+                crate::app::CleanerSortMode::Name => crate::app::CleanerSortMode::Size,
+            };
+            cleaner_apply_sort(app);
+        }
+        KeyCode::Char('r') => {
+            // Refresh
+            cleaner_rebuild_tree(app);
+            app.cleaner_status = Some("Refreshed".to_string());
+            app.cleaner_status_time = Some(std::time::Instant::now());
+        }
+        KeyCode::Home | KeyCode::Char('g') => {
+            app.cleaner_selected = 0;
+            app.cleaner_scroll = 0;
+            app.cleaner_confirm_delete = false;
+            app.cleaner_confirm_clean = false;
+        }
+        KeyCode::End | KeyCode::Char('G') => {
+            app.cleaner_selected = app.cleaner_entries.len().saturating_sub(1);
+            app.cleaner_confirm_delete = false;
+            app.cleaner_confirm_clean = false;
         }
         _ => {}
     }
 
     Ok(())
+}
+
+/// Go back in cleaner navigation
+fn cleaner_go_back(app: &mut App) {
+    if let Some(prev) = app.cleaner_path_stack.pop() {
+        let current_name = app.cleaner_path.file_name()
+            .map(|n| n.to_string_lossy().to_string());
+        app.cleaner_path = prev;
+        cleaner_load_current_dir_with_selection(app, current_name.as_deref());
+    }
+    app.cleaner_confirm_delete = false;
+    app.cleaner_confirm_clean = false;
+}
+
+/// Load current directory entries
+fn cleaner_load_current_dir(app: &mut App) {
+    cleaner_load_current_dir_with_selection(app, None);
+}
+
+/// Load current directory entries with optional selection
+fn cleaner_load_current_dir_with_selection(app: &mut App, select_name: Option<&str>) {
+    if let Some(ref tree) = app.cleaner_tree {
+        app.cleaner_entries = tree.get_children(&app.cleaner_path);
+        cleaner_apply_sort(app);
+        app.cleaner_total_size = app.cleaner_entries.iter().map(|e| e.size).sum();
+    }
+
+    // Try to select the specified item
+    if let Some(name) = select_name {
+        if let Some(idx) = app.cleaner_entries.iter().position(|e| e.name == name) {
+            app.cleaner_selected = idx;
+        } else {
+            app.cleaner_selected = app.cleaner_selected.min(app.cleaner_entries.len().saturating_sub(1));
+        }
+    } else {
+        app.cleaner_selected = 0;
+    }
+
+    app.cleaner_scroll = 0;
+    app.cleaner_confirm_delete = false;
+    app.cleaner_confirm_clean = false;
+}
+
+/// Rebuild the cleaner tree from scratch
+fn cleaner_rebuild_tree(app: &mut App) {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use crate::cleaner;
+
+    if let Some(ref matcher) = app.cleaner_matcher {
+        let root = app.cleaner_path.clone();
+        
+        // Setup async scan
+        let progress = Arc::new(cleaner::ScanProgress::new());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        
+        app.cleaner_progress = Some(Arc::clone(&progress));
+        app.cleaner_scan_cancelled = Some(Arc::clone(&cancelled));
+        
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        app.cleaner_scan_rx = Some(rx);
+        
+        let matcher_clone = Arc::clone(matcher);
+        let root_clone = root.clone();
+
+        std::thread::spawn(move || {
+            let tree = cleaner::DirTree::build_with_progress(&root_clone, &matcher_clone, progress, cancelled);
+            let _ = tx.send(tree);
+        });
+        
+        app.message = format!("Rescanning {}...", root.display());
+    }
 }
 
 // ============================================================================

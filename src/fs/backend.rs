@@ -257,4 +257,9 @@ pub trait StorageBackend: Send + Sync {
     fn root_path(&self) -> &str {
         "/"
     }
+
+    /// Check if backend is local filesystem
+    fn is_local(&self) -> bool {
+        matches!(self.backend_type(), BackendType::Local)
+    }
 }

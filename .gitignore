@@ -1,5 +1,6 @@
 /target/
 hash-rs/
+/cleaner/
 Cargo.lock
 .DS_Store
 *.swp

@@ -619,3 +619,174 @@ pub fn render_confirm_large_load_popup(f: &mut Frame, app: &crate::app::App) {
 
     f.render_widget(popup, popup_area);
 }
+
+/// Render disk analyzer (ncdu-like) in single-pane mode.
+/// This is used when the user presses 'u' to enter disk analyzer mode from the main TUI.
+pub fn render_disk_analyzer(f: &mut Frame, app: &App, area: Rect) {
+    use ratatui::widgets::{List, ListItem, ListState};
+
+    const TEMP_COLOR: Color = Color::Red;
+    const DIR_COLOR: Color = Color::Blue;
+    const FILE_COLOR: Color = Color::White;
+
+    // Split area into header, list, and footer
+    let chunks = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            ratatui::layout::Constraint::Length(3), // Header
+            ratatui::layout::Constraint::Min(5),    // List
+            ratatui::layout::Constraint::Length(3), // Footer
+        ])
+        .split(area);
+
+    // Header
+    let path_str = app.cleaner_path.to_string_lossy();
+    let total_size = humansize::format_size(app.cleaner_total_size, humansize::BINARY);
+    let sort_str = match app.cleaner_sort_mode {
+        crate::app::CleanerSortMode::Size => "size",
+        crate::app::CleanerSortMode::Name => "name",
+    };
+
+    let header = Paragraph::new(format!(
+        " {} │ Total: {} │ Sort: {} │ {} items",
+        path_str,
+        total_size,
+        sort_str,
+        app.cleaner_entries.len()
+    ))
+    .block(Block::default().borders(Borders::ALL).title(" Disk Analyzer "));
+
+    f.render_widget(header, chunks[0]);
+
+    // Check if scanning
+    if let Some(ref progress) = app.cleaner_progress {
+        let files = progress.get_files();
+        let dirs = progress.get_dirs();
+        let bytes = progress.get_bytes();
+        let size_str = humansize::format_size(bytes, humansize::BINARY);
+        
+        let text = format!(
+            "\n\n  Scanning {}...\n\n  📁 {} folders\n  📄 {} files\n  💾 {}\n\n  Press 'q' to cancel",
+            app.cleaner_path.display(),
+            dirs,
+            files,
+            size_str
+        );
+        
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Scanning... ");
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(paragraph, chunks[1]);
+        
+        // Render simple footer
+        let footer = Paragraph::new("Scanning...").block(Block::default().borders(Borders::ALL));
+        f.render_widget(footer, chunks[2]);
+        return;
+    }
+
+    // Check if cleaning/deleting
+    if let Some(ref stats) = app.cleaner_delete_stats {
+        let files = stats.files();
+        let dirs = stats.directories();
+        let bytes = stats.bytes();
+        let size_str = humansize::format_size(bytes, humansize::BINARY);
+        
+        let text = format!(
+            "\n\n  Cleaning {}...\n\n  🗑️ {} folders deleted\n  📄 {} files deleted\n  💾 {} freed",
+            app.cleaner_path.display(),
+            dirs,
+            files,
+            size_str
+        );
+        
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Cleaning... (Async) ");
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(paragraph, chunks[1]);
+        
+        // Render simple footer
+        let footer = Paragraph::new("Cleaning in progress...").block(Block::default().borders(Borders::ALL));
+        f.render_widget(footer, chunks[2]);
+        return;
+    }
+
+    // List
+    let items: Vec<ListItem> = app
+        .cleaner_entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let size_str = humansize::format_size(entry.size, humansize::BINARY);
+            let prefix = if entry.is_dir { "▸ " } else { "  " };
+            let temp_marker = if entry.is_temp { " [TEMP]" } else { "" };
+
+            let text = format!(
+                "{}{:<40} {:>10}{}",
+                prefix, entry.name, size_str, temp_marker
+            );
+
+            let style = if i == app.cleaner_selected {
+                Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+            } else if entry.is_temp {
+                Style::default().fg(TEMP_COLOR)
+            } else if entry.is_dir {
+                Style::default().fg(DIR_COLOR)
+            } else {
+                Style::default().fg(FILE_COLOR)
+            };
+
+            ListItem::new(text).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL))
+        .highlight_style(Style::default().bg(Color::DarkGray));
+
+    let mut state = ListState::default();
+    state.select(Some(app.cleaner_selected));
+
+    f.render_stateful_widget(list, chunks[1], &mut state);
+
+    // Footer
+    let text = if app.cleaner_confirm_clean {
+        format!(
+            " Clean all temp files in '{}'? (y/n)",
+            app.cleaner_path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| app.cleaner_path.to_string_lossy().to_string())
+        )
+    } else if app.cleaner_confirm_delete {
+        if let Some(entry) = app.cleaner_entries.get(app.cleaner_selected) {
+            format!(
+                " Delete '{}'? (y/n) - {} will be freed",
+                entry.name,
+                humansize::format_size(entry.size, humansize::BINARY)
+            )
+        } else {
+            " Delete? (y/n)".to_string()
+        }
+    } else if let Some(ref msg) = app.cleaner_status {
+        format!(" {} │ c:clean  d:delete  s:sort  r:refresh  Esc:exit", msg)
+    } else {
+        " ↑↓:nav  Enter:open  ←:back  c:clean  d:delete  s:sort  r:refresh  Esc:exit".to_string()
+    };
+
+    let style = if app.cleaner_confirm_delete || app.cleaner_confirm_clean {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    let footer = Paragraph::new(text)
+        .style(style)
+        .block(Block::default().borders(Borders::ALL));
+
+    f.render_widget(footer, chunks[2]);
+}
