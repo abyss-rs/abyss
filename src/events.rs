@@ -1418,7 +1418,10 @@ fn cleaner_rebuild_tree(app: &mut App) {
     use crate::cleaner;
 
     if let Some(ref matcher) = app.cleaner_matcher {
-        let root = app.cleaner_path.clone();
+        // Rescan from the ORIGINAL root (start of session), not current subdir
+        let root = app.cleaner_path_stack.first()
+            .cloned()
+            .unwrap_or_else(|| app.cleaner_path.clone());
         
         // Setup async scan
         let progress = Arc::new(cleaner::ScanProgress::new());
