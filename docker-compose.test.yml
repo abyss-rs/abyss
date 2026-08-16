@@ -1,0 +1,85 @@
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb myminio/abyss-test --ignore-existing;
+      exit 0;
+      "
+
+  sftp:
+    image: atmoz/sftp:latest
+    ports:
+      - "2222:22"
+    command: testuser:testpass:1001:1001:upload
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 22 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  ftp:
+    image: fauria/vsftpd:latest
+    ports:
+      - "2121:21"
+      - "21100-21110:21100-21110"
+    environment:
+      FTP_USER: testuser
+      FTP_PASS: testpass
+      PASV_ENABLE: "YES"
+      PASV_MIN_PORT: 21100
+      PASV_MAX_PORT: 21110
+      PASV_ADDRESS: 127.0.0.1
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 21 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  smb:
+    image: dperson/samba:latest
+    ports:
+      - "4450:445"
+    environment:
+      USERID: "1000"
+      GROUPID: "1000"
+    command: -p -u "testuser;testpass" -s "abyss;/data;yes;no;no;testuser"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 445 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  webdav:
+    image: bytemark/webdav:latest
+    ports:
+      - "8080:80"
+    environment:
+      AUTH_TYPE: Basic
+      USERNAME: testuser
+      PASSWORD: testpass
+      LOCATION: /webdav
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 80 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 10

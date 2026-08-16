@@ -1,0 +1,3 @@
+# Non-secret overrides only. Authenticate with AWS_PROFILE or the AWS CLI.
+region        = "eu-north-1"
+abyss_profile = "abyss-aws"

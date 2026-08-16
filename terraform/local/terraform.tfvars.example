@@ -1,0 +1,5 @@
+# Non-secret overrides only. Supply root credentials through the two TF_VAR_
+# environment variables documented in README.md.
+api_port     = 9000
+console_port = 9001
+abyss_profile = "abyss-local"

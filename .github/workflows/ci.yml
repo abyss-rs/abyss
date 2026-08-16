@@ -1,0 +1,581 @@
+name: CI & Release
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      task_to_run:
+        description: 'Which part of the workflow to run'
+        type: choice
+        options:
+          - test
+          - release
+          - docker
+          - test-freebsd-aarch64
+          - release-freebsd-aarch64
+        required: true
+        default: 'test'
+      tag_name:
+        description: 'Required for "release", "release-freebsd-aarch64", or "docker" task: The tag for the action (e.g., v1.0.1)'
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BINARY_NAME: abyss
+  HELPER_IMAGE_NAME: abyss-kube-helper
+
+jobs:
+  format:
+    name: Rustfmt
+    if: |
+      github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'test')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy on ${{ matrix.os }}
+    if: |
+      github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'test')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: clippy-${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # ===================================================================
+  # Verify minimum supported Rust version
+  # ===================================================================
+  msrv:
+    name: Minimum supported Rust version
+    if: |
+      github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'test')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Read rust-version from the manifest
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "Declared MSRV: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install declared toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: msrv-${{ steps.msrv.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check the workspace
+        run: cargo check --workspace
+
+  # ===================================================================
+  # Run Tests and Checks across platforms
+  # ===================================================================
+  test_and_check:
+    name: Test on ${{ matrix.target }}
+    if: |
+      github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'test')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - runner: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+          - runner: windows-latest
+            target: aarch64-pc-windows-msvc
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: ubuntu-latest
+            target: x86_64-unknown-freebsd
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        if: matrix.target != 'x86_64-unknown-freebsd'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache Cargo dependencies
+        if: matrix.target != 'x86_64-unknown-freebsd'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install dependencies for ARM cross-compile (Linux)
+        if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
+            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+          fi
+      - name: Configure cross-linker (Linux ARM)
+        if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
+        run: |
+          mkdir -p ~/.cargo "$HOME/bin"
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+            echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+          elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
+            cat > "$HOME/bin/arm-linux-gnueabihf-gcc-wrap" <<'EOF'
+          #!/usr/bin/env bash
+          args=()
+          for arg in "$@"; do
+            if [[ "$arg" != "-mno-omit-leaf-frame-pointer" ]]; then
+              args+=("$arg")
+            fi
+          done
+          exec arm-linux-gnueabihf-gcc "${args[@]}"
+          EOF
+            chmod +x "$HOME/bin/arm-linux-gnueabihf-gcc-wrap"
+            echo '[target.armv7-unknown-linux-gnueabihf]' >> ~/.cargo/config.toml
+            echo "linker = \"$HOME/bin/arm-linux-gnueabihf-gcc-wrap\"" >> ~/.cargo/config.toml
+            echo "CC_armv7_unknown_linux_gnueabihf=$HOME/bin/arm-linux-gnueabihf-gcc-wrap" >> "$GITHUB_ENV"
+          fi
+      - name: Build workspace
+        if: matrix.target != 'x86_64-unknown-freebsd'
+        run: cargo build --target ${{ matrix.target }} --workspace
+      - name: Run tests
+        if: matrix.target != 'aarch64-unknown-linux-gnu' && matrix.target != 'armv7-unknown-linux-gnueabihf' && matrix.target != 'aarch64-pc-windows-msvc' && matrix.target != 'x86_64-pc-windows-msvc' && matrix.target != 'x86_64-unknown-freebsd'
+        run: cargo test --target ${{ matrix.target }} --workspace
+      - name: Build and test in FreeBSD VM
+        if: matrix.target == 'x86_64-unknown-freebsd'
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          usesh: true
+          sync: rsync
+          copyback: false
+          mem: "6144"
+          cache-after-prepare: true
+          prepare: |
+            pkg install -y curl bash git
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          run: |
+            set -e
+            . "$HOME/.cargo/env"
+            rustc -vV
+            cargo build --workspace
+            cargo test --workspace
+
+  # ===================================================================
+  # Manual FreeBSD aarch64 test
+  # ===================================================================
+  test_freebsd_aarch64:
+    name: Test on aarch64-unknown-freebsd (manual)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'test-freebsd-aarch64'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and test in FreeBSD aarch64 VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          arch: aarch64
+          usesh: true
+          sync: rsync
+          copyback: false
+          mem: "6144"
+          cache-after-prepare: true
+          prepare: |
+            pkg install -y curl bash git rust
+          run: |
+            set -e
+            rustc -vV
+            cargo build --workspace
+            cargo test --workspace
+
+  # ===================================================================
+  # Build Release Artifacts
+  # ===================================================================
+  build_release_artifacts:
+    name: Build release for ${{ matrix.target }}
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'release')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            os-arch: linux-x86_64
+            asset_ext: .tar.gz
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            os-arch: windows-x86_64
+            asset_ext: .zip
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            os-arch: macos-x86_64
+            asset_ext: .tar.gz
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            os-arch: linux-arm64
+            asset_ext: .tar.gz
+          - runner: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            os-arch: linux-armv7
+            asset_ext: .tar.gz
+          - runner: windows-latest
+            target: aarch64-pc-windows-msvc
+            os-arch: windows-arm64
+            asset_ext: .zip
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            os-arch: macos-arm64
+            asset_ext: .tar.gz
+          - runner: ubuntu-latest
+            target: x86_64-unknown-freebsd
+            os-arch: freebsd-x86_64
+            asset_ext: .tar.gz
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        if: matrix.target != 'x86_64-unknown-freebsd'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install dependencies for ARM cross-compile (Linux)
+        if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
+            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+          fi
+      - name: Configure cross-linker (Linux ARM)
+        if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
+        run: |
+          mkdir -p ~/.cargo "$HOME/bin"
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+            echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+          elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
+            cat > "$HOME/bin/arm-linux-gnueabihf-gcc-wrap" <<'EOF'
+          #!/usr/bin/env bash
+          args=()
+          for arg in "$@"; do
+            if [[ "$arg" != "-mno-omit-leaf-frame-pointer" ]]; then
+              args+=("$arg")
+            fi
+          done
+          exec arm-linux-gnueabihf-gcc "${args[@]}"
+          EOF
+            chmod +x "$HOME/bin/arm-linux-gnueabihf-gcc-wrap"
+            echo '[target.armv7-unknown-linux-gnueabihf]' >> ~/.cargo/config.toml
+            echo "linker = \"$HOME/bin/arm-linux-gnueabihf-gcc-wrap\"" >> ~/.cargo/config.toml
+            echo "CC_armv7_unknown_linux_gnueabihf=$HOME/bin/arm-linux-gnueabihf-gcc-wrap" >> "$GITHUB_ENV"
+          fi
+      - name: Build release binary
+        if: matrix.target != 'x86_64-unknown-freebsd'
+        run: cargo build --release --target ${{ matrix.target }} -p abyss-tui --bin ${{ env.BINARY_NAME }}
+      - name: Build binary in FreeBSD VM
+        if: matrix.target == 'x86_64-unknown-freebsd'
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          usesh: true
+          sync: rsync
+          copyback: true
+          mem: "6144"
+          cache-after-prepare: true
+          prepare: |
+            pkg install -y curl bash git
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          run: |
+            set -e
+            . "$HOME/.cargo/env"
+            rustc -vV
+            cargo build --release -p abyss-tui --bin ${{ env.BINARY_NAME }}
+      - name: Package artifacts
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            if [ -z "${{ github.event.inputs.tag_name }}" ]; then
+              echo "Error: The 'tag_name' input is required when running the 'release' task."
+              exit 1
+            fi
+            VERSION_TAG="${{ github.event.inputs.tag_name }}"
+          else
+            VERSION_TAG="${{ github.ref_name }}"
+          fi
+          echo "Packaging artifacts for version: $VERSION_TAG"
+          if [ "${{ matrix.target }}" == "x86_64-unknown-freebsd" ]; then
+            BINARY_DIR="target/release"
+          else
+            BINARY_DIR="target/${{ matrix.target }}/release"
+          fi
+          ASSET_NAME="${{ env.BINARY_NAME }}-${VERSION_TAG}-${{ matrix.os-arch }}${{ matrix.asset_ext }}"
+          mkdir -p dist_pkg
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            cp "$BINARY_DIR/${{ env.BINARY_NAME }}.exe" dist_pkg/
+            cp README.md LICENSE-MIT LICENSE-APACHE dist_pkg/ || true
+            powershell Compress-Archive -Path dist_pkg/* -DestinationPath "$ASSET_NAME"
+            powershell "(Get-FileHash -Algorithm SHA256 '$ASSET_NAME').Hash.ToLowerInvariant() + '  $ASSET_NAME'" | tee "$ASSET_NAME.sha256"
+          else
+            cp "$BINARY_DIR/${{ env.BINARY_NAME }}" dist_pkg/
+            cp README.md LICENSE-MIT LICENSE-APACHE dist_pkg/ || true
+            tar -czf "$ASSET_NAME" -C dist_pkg .
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
+            else
+              shasum -a 256 "$ASSET_NAME" > "$ASSET_NAME.sha256"
+            fi
+          fi
+      - name: Upload artifact for release
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifact-${{ matrix.os-arch }}
+          path: ${{ env.BINARY_NAME }}-*
+
+  # ===================================================================
+  # Manual FreeBSD aarch64 release build
+  # ===================================================================
+  release_freebsd_aarch64:
+    name: Build release for aarch64-unknown-freebsd (manual)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'release-freebsd-aarch64'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Require tag_name
+        run: |
+          if [ -z "${{ github.event.inputs.tag_name }}" ]; then
+            echo "Error: The 'tag_name' input is required when running the 'release-freebsd-aarch64' task."
+            exit 1
+          fi
+      - name: Build release binary in FreeBSD aarch64 VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          arch: aarch64
+          usesh: true
+          sync: rsync
+          copyback: true
+          mem: "6144"
+          cache-after-prepare: true
+          prepare: |
+            pkg install -y curl bash git rust
+          run: |
+            set -e
+            rustc -vV
+            cargo build --release -p abyss-tui --bin ${{ env.BINARY_NAME }}
+      - name: Package artifact
+        shell: bash
+        run: |
+          VERSION_TAG="${{ github.event.inputs.tag_name }}"
+          ASSET_NAME="${{ env.BINARY_NAME }}-${VERSION_TAG}-freebsd-arm64.tar.gz"
+          mkdir -p dist_pkg
+          cp target/release/${{ env.BINARY_NAME }} dist_pkg/
+          cp README.md LICENSE-MIT LICENSE-APACHE dist_pkg/ || true
+          tar -czf "$ASSET_NAME" -C dist_pkg .
+          sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifact-freebsd-arm64
+          path: ${{ env.BINARY_NAME }}-*
+      - name: Upload asset to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION_TAG="${{ github.event.inputs.tag_name }}"
+          ASSET_NAME="${{ env.BINARY_NAME }}-${VERSION_TAG}-freebsd-arm64.tar.gz"
+          gh release upload "$VERSION_TAG" "$ASSET_NAME" "$ASSET_NAME.sha256" --clobber
+
+  # ===================================================================
+  # Create GitHub Release
+  # ===================================================================
+  create_github_release:
+    name: Create GitHub Release
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'release')
+    runs-on: ubuntu-latest
+    needs: build_release_artifacts
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create GitHub Release and Upload Artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name || github.ref_name }}
+          draft: true
+          files: release-artifacts/*/*
+
+  # ===================================================================
+  # Build and Push Kubernetes Helper Multi-Arch Docker Image
+  # ===================================================================
+  build_and_push_docker:
+    name: Build and Push Helper Docker Image
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'docker')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine Version Tag
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            if [ -z "${{ github.event.inputs.tag_name }}" ]; then
+              echo "Error: The 'tag_name' input is required when running the '${{ github.event.inputs.task_to_run }}' task manually."
+              exit 1
+            fi
+            echo "TAG=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ env.HELPER_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.get_version.outputs.TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.get_version.outputs.TAG }}
+            type=semver,pattern={{major}},value=${{ steps.get_version.outputs.TAG }}
+            type=raw,value=latest,enable=${{ startsWith(steps.get_version.outputs.TAG, 'v') }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.kube-helper
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+
+  # ===================================================================
+  # Homebrew Formula Update (Temporarily disabled)
+  # ===================================================================
+  # update_homebrew_formula:
+  #   name: Update Homebrew Formula
+  #   needs: create_github_release
+  #   if: |
+  #     (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+  #     (github.event_name == 'workflow_dispatch' && github.event.inputs.task_to_run == 'release')
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Get tag name
+  #       id: get_tag
+  #       run: |
+  #         if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+  #           echo "TAG=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+  #         else
+  #           echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+  #         fi
+  #     - name: Checkout Homebrew Tap Repo
+  #       uses: actions/checkout@v4
+  #       with:
+  #         repository: ${{ github.repository_owner }}/homebrew-abyss
+  #         token: ${{ secrets.HOMEBREW_TAP_TOKEN || secrets.GITHUB_TOKEN }}
+  #         path: homebrew-abyss
+  #     - name: Calculate Checksums and Update Formula
+  #       run: |
+  #         TAG_NAME="${{ steps.get_tag.outputs.TAG }}"
+  #         VERSION=${TAG_NAME#v}
+  #         echo "Updating Homebrew Formula for $VERSION..."

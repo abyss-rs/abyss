@@ -1,0 +1,22 @@
+[package]
+name = "abyss-kube-helper"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[dependencies]
+brotli = "8.0.4"
+ciborium = "0.2.2"
+flate2 = "1.1.9"
+libc = "0.2.189"
+lz4_flex = "0.14.0"
+rustix = "1.1.4"
+serde = { version = "1.0.229", features = ["derive"] }

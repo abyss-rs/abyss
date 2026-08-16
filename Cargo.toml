@@ -1,0 +1,59 @@
+[workspace]
+members = [
+    "crates/abyss-core",
+    "crates/abyss-tui",
+]
+default-members = ["crates/abyss-tui"]
+exclude = ["kube-helper"]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = 0
+strip = true
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.dev.package.lz4_flex]
+opt-level = 3
+
+[profile.dev.package.brotli]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.zip]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.zlib-rs]
+opt-level = 3
+
+[profile.dev.package.sevenz-rust2]
+opt-level = 3
+
+[profile.dev.package.lzma-rust2]
+opt-level = 3
+
+[profile.dev.package.zstd]
+opt-level = 3
+
+[profile.dev.package.zstd-safe]
+opt-level = 3
+
+[profile.dev.package.zstd-sys]
+opt-level = 3

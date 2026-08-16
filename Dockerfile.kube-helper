@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.7
+FROM --platform=$BUILDPLATFORM rust:1.97-bookworm AS build
+ARG TARGETARCH
+RUN rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+WORKDIR /build
+COPY kube-helper/Cargo.toml Cargo.toml
+COPY kube-helper/Cargo.lock Cargo.lock
+COPY crates/abyss-core/src/bin/abyss-kube-helper.rs src/main.rs
+COPY crates/abyss-core/src/storage/helper_protocol.rs storage/helper_protocol.rs
+RUN case "$TARGETARCH" in \
+      amd64) target=x86_64-unknown-linux-musl ;; \
+      arm64) target=aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    RUSTFLAGS="-C linker=rust-lld" cargo build --locked --release --target "$target" && \
+    cp "target/$target/release/abyss-kube-helper" /abyss-kube-helper
+
+FROM scratch
+COPY --from=build /abyss-kube-helper /usr/local/bin/abyss-kube-helper
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/abyss-kube-helper"]
