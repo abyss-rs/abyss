@@ -122,6 +122,7 @@ pub(super) fn remove_file_readonly(path: &Path) -> io::Result<()> {
     fs::remove_file(path)
 }
 
+#[allow(clippy::permissions_set_readonly_false)]
 pub(super) fn clear_readonly(path: &Path) -> io::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.permissions().readonly() {
