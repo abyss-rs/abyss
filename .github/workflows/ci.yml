@@ -370,8 +370,12 @@ jobs:
           if [ "${{ runner.os }}" == "Windows" ]; then
             cp "$BINARY_DIR/${{ env.BINARY_NAME }}.exe" dist_pkg/
             cp README.md LICENSE-MIT LICENSE-APACHE dist_pkg/ || true
-            powershell Compress-Archive -Path dist_pkg/* -DestinationPath "$ASSET_NAME"
-            powershell "(Get-FileHash -Algorithm SHA256 '$ASSET_NAME').Hash.ToLowerInvariant() + '  $ASSET_NAME'" | tee "$ASSET_NAME.sha256"
+            powershell -Command "Compress-Archive -Path 'dist_pkg/*' -DestinationPath '$ASSET_NAME' -Force"
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
+            else
+              powershell -Command "(Get-FileHash -Algorithm SHA256 '$ASSET_NAME').Hash.ToLowerInvariant() + '  $ASSET_NAME'" > "$ASSET_NAME.sha256"
+            fi
           else
             cp "$BINARY_DIR/${{ env.BINARY_NAME }}" dist_pkg/
             cp README.md LICENSE-MIT LICENSE-APACHE dist_pkg/ || true
