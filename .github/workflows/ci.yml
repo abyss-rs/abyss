@@ -188,9 +188,9 @@ jobs:
         run: |
           sudo apt-get update
           if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
           elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
-            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
           fi
       - name: Configure cross-linker (Linux ARM)
         if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
@@ -199,6 +199,8 @@ jobs:
           if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
             echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
             echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> "$GITHUB_ENV"
           elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
             cat > "$HOME/bin/arm-linux-gnueabihf-gcc-wrap" <<'EOF'
           #!/usr/bin/env bash
@@ -211,9 +213,23 @@ jobs:
           exec arm-linux-gnueabihf-gcc "${args[@]}"
           EOF
             chmod +x "$HOME/bin/arm-linux-gnueabihf-gcc-wrap"
+
+            cat > "$HOME/bin/arm-linux-gnueabihf-g++-wrap" <<'EOF'
+          #!/usr/bin/env bash
+          args=()
+          for arg in "$@"; do
+            if [[ "$arg" != "-mno-omit-leaf-frame-pointer" ]]; then
+              args+=("$arg")
+            fi
+          done
+          exec arm-linux-gnueabihf-g++ "${args[@]}"
+          EOF
+            chmod +x "$HOME/bin/arm-linux-gnueabihf-g++-wrap"
+
             echo '[target.armv7-unknown-linux-gnueabihf]' >> ~/.cargo/config.toml
             echo "linker = \"$HOME/bin/arm-linux-gnueabihf-gcc-wrap\"" >> ~/.cargo/config.toml
             echo "CC_armv7_unknown_linux_gnueabihf=$HOME/bin/arm-linux-gnueabihf-gcc-wrap" >> "$GITHUB_ENV"
+            echo "CXX_armv7_unknown_linux_gnueabihf=$HOME/bin/arm-linux-gnueabihf-g++-wrap" >> "$GITHUB_ENV"
           fi
       - name: Build workspace
         run: cargo build --target ${{ matrix.target }} --workspace
@@ -286,9 +302,9 @@ jobs:
         run: |
           sudo apt-get update
           if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
           elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
-            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
           fi
       - name: Configure cross-linker (Linux ARM)
         if: runner.os == 'Linux' && (matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf')
@@ -297,6 +313,8 @@ jobs:
           if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
             echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
             echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> "$GITHUB_ENV"
           elif [ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]; then
             cat > "$HOME/bin/arm-linux-gnueabihf-gcc-wrap" <<'EOF'
           #!/usr/bin/env bash
@@ -309,9 +327,23 @@ jobs:
           exec arm-linux-gnueabihf-gcc "${args[@]}"
           EOF
             chmod +x "$HOME/bin/arm-linux-gnueabihf-gcc-wrap"
+
+            cat > "$HOME/bin/arm-linux-gnueabihf-g++-wrap" <<'EOF'
+          #!/usr/bin/env bash
+          args=()
+          for arg in "$@"; do
+            if [[ "$arg" != "-mno-omit-leaf-frame-pointer" ]]; then
+              args+=("$arg")
+            fi
+          done
+          exec arm-linux-gnueabihf-g++ "${args[@]}"
+          EOF
+            chmod +x "$HOME/bin/arm-linux-gnueabihf-g++-wrap"
+
             echo '[target.armv7-unknown-linux-gnueabihf]' >> ~/.cargo/config.toml
             echo "linker = \"$HOME/bin/arm-linux-gnueabihf-gcc-wrap\"" >> ~/.cargo/config.toml
             echo "CC_armv7_unknown_linux_gnueabihf=$HOME/bin/arm-linux-gnueabihf-gcc-wrap" >> "$GITHUB_ENV"
+            echo "CXX_armv7_unknown_linux_gnueabihf=$HOME/bin/arm-linux-gnueabihf-g++-wrap" >> "$GITHUB_ENV"
           fi
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} -p abyss-tui --bin ${{ env.BINARY_NAME }}
