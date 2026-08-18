@@ -43,6 +43,14 @@ Or enable individual providers, for example:
 cargo build -p abyss-tui --bin abyss --features s3,sftp
 ```
 
+## Testing
+
+Run the complete test suite across all workspace crates, targets, and feature flags:
+
+```sh
+cargo test --workspace --all-targets --all-features
+```
+
 ## Supported Storage Providers
 
 - Local Filesystem (always available)
