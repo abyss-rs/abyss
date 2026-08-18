@@ -114,15 +114,15 @@ fn creates_compressed_qh_and_hashdeep_with_canonical_suffixes() {
     let source = root.join("one.txt");
     fs::write(&source, b"one").unwrap();
     let cancelled = AtomicBool::new(false);
-    for (format, compressed, name) in [
-        (DatabaseFormat::Quichash, true, "compressed.qh.xz"),
-        (DatabaseFormat::Hashdeep, false, "portable.hashdeep"),
+    for (format, compressed, dest, expected_name) in [
+        (DatabaseFormat::Quichash, true, "compressed", "compressed.qh.zst"),
+        (DatabaseFormat::Hashdeep, false, "portable", "portable.hashdeep"),
     ] {
         let actual = create_database(
             &HashCreateOptions {
                 sources: vec![source.clone()],
                 root: root.to_owned(),
-                destination: root.join(name),
+                destination: root.join(dest),
                 algorithm: Algorithm::Blake3,
                 format,
                 compressed,
@@ -132,7 +132,7 @@ fn creates_compressed_qh_and_hashdeep_with_canonical_suffixes() {
             &CopyStats::default(),
         )
         .unwrap();
-        assert_eq!(actual, root.join(name));
+        assert_eq!(actual, root.join(expected_name));
         verify_database(&actual, root, &cancelled, &CopyStats::default()).unwrap();
     }
 }

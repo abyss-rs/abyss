@@ -1,5 +1,5 @@
 # Non-Rust Components & C/C++/Assembly Dependencies in Abyss
-# Generated: 2026-08-18 (Updated: Zstandard -> structured-zstd, RAR -> External Multi-CLI Engine)
+# Generated: 2026-08-18
 
 This document lists all dependencies in the Abyss dependency tree that compile
 or link non-Rust source code (C, C++, Assembly) or provide raw C FFI bindings.
@@ -7,11 +7,6 @@ or link non-Rust source code (C, C++, Assembly) or provide raw C FFI bindings.
 ===============================================================================
 1. C & Assembly Native Libraries (Compiled via cc / build.rs)
 ===============================================================================
-
-- lzma-sys (v0.1.20) [via quichash-core]
-  * Language: C
-  * Upstream: XZ Utils / liblzma
-  * Purpose: LZMA / XZ hashing in quichash-core.
 
 - ring (v0.17.14)
   * Language: C, Assembly (x86_64, aarch64, armv7), and Rust
