@@ -81,19 +81,14 @@ pub fn create_database(
         }
 
         let observer = ScanObserver::new(cancelled, stats, objects, bytes);
-        let report = scan_folder(
-            source,
-            &ScanOptions {
-                algorithms: vec![options.algorithm],
-                mode: HashMode::Full,
-                parallel: options.parallel,
-                use_hashignore: true,
-                failure_policy: FailurePolicy::FailFast,
-                exclude: Some(final_path.clone()),
-            },
-            &observer,
-        )
-        .map_err(core_error)?;
+        let scan_options = ScanOptions::new()
+            .with_algorithms(vec![options.algorithm])
+            .with_mode(HashMode::Full)
+            .with_parallel(options.parallel)
+            .with_hashignore(true)
+            .with_failure_policy(FailurePolicy::FailFast)
+            .with_exclude(Some(final_path.clone()));
+        let report = scan_folder(source, &scan_options, &observer).map_err(core_error)?;
         let prefix = relative_to_root(source, &options.root);
         manifest
             .entries
@@ -120,23 +115,23 @@ pub fn create_database(
         options.format,
         options.compressed,
     )
-    .map_err(core_error)
+    .map_err(core_error)?;
+    Ok(final_path)
 }
 
 pub(crate) fn relative_to_root(path: &Path, root: &Path) -> PathBuf {
+    if path == root {
+        return PathBuf::new();
+    }
     path.strip_prefix(root)
-        .ok()
-        .filter(|path| !path.as_os_str().is_empty())
-        .map(Path::to_owned)
-        .or_else(|| path.file_name().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("item"))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| path.file_name().map(PathBuf::from).unwrap_or_default())
 }
 
 pub(crate) fn core_error(error: HashUtilityError) -> Error {
-    if matches!(error, HashUtilityError::Cancelled) {
-        Error::Cancelled
-    } else {
-        Error::message(error.to_string())
+    match error {
+        HashUtilityError::Cancelled => Error::Cancelled,
+        other => Error::message(other.to_string()),
     }
 }
 
@@ -194,7 +189,7 @@ impl OperationObserver for ScanObserver<'_> {
                     self.stats.observe_transfer(path);
                 }
             }
-            ProgressPhase::Writing | ProgressPhase::Verifying => {}
+            ProgressPhase::Writing | ProgressPhase::Verifying | _ => {}
         }
     }
 
