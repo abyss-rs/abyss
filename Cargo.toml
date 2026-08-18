@@ -8,11 +8,92 @@ exclude = ["kube-helper"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
-publish = false
+repository = "https://github.com/vyrti/abyss"
+homepage = "https://github.com/vyrti/abyss"
+
+[workspace.dependencies]
+# Local workspace and sibling crates
+abyss-core = { version = "0.1.0", path = "crates/abyss-core" }
+cleaner-tui = { version = "0.1.0", path = "../cleaner/crates/cleaner-tui", default-features = false }
+quichash-core = { version = "0.1.0", path = "../quichash/crates/quichash-core" }
+
+
+# External crates
+async-trait = "0.1.92"
+bat = { version = "0.26", default-features = false, features = ["regex-fancy"] }
+blake3 = { version = "1.8", features = ["rayon", "std"] }
+brotli = "8.0.4"
+bytes = "1.12.1"
+bzip2 = "0.6.1"
+chrono = "0.4.45"
+ciborium = "0.2.2"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+directories = "6.0.0"
+flate2 = "1.1.9"
+futures-util = "0.3.34"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+k8s-openapi = { version = "0.28.0", features = ["v1_36"] }
+kube = { version = "4.2.0", features = ["client", "config", "ring", "rustls-tls", "ws"] }
+libc = "0.2.189"
+lofty = "0.25.1"
+lz4_flex = { version = "0.14.0", features = ["frame"] }
+lzma-rust2 = { version = "0.18.1", default-features = false, features = ["std", "encoder", "lzip", "xz"] }
+object_store = { version = "0.14.1", default-features = false }
+percent-encoding = "2.3.2"
+portable-pty = "0.9"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+rayon = "1.12"
+rustix = { version = "1.1.4", features = ["fs"] }
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sevenz-rust2 = "0.21.4"
+sha2 = "0.11.0"
+shell-words = "1.1"
+signal-hook = "0.4"
+similar = "3.1"
+ssh2 = "0.9.6"
+suppaftp = { version = "10.0.1", features = ["tokio-rustls-ring", "deprecated"] }
+syntect = { version = "5.3", default-features = false, features = [
+    "default-syntaxes",
+    "default-themes",
+    "regex-fancy",
+    "parsing",
+] }
+sysinfo = "0.39"
+tar = "0.4.46"
+tempfile = "3"
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7.19", features = ["io"] }
+toml = "1.1.4"
+trash = "5.2.6"
+tui-term = { version = "0.3", default-features = false, features = ["vt100"] }
+unarc-rs = "0.6.2"
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.24.1", features = ["v4", "serde"] }
+vt100 = "0.16"
+webpki-roots = "1.0.9"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_SystemServices",
+] }
+zeroize = "1"
+zip = { version = "8.6.0", default-features = false, features = ["aes-crypto", "bzip2", "deflate-flate2", "xz", "zstd"] }
+zstd = { version = "0.13", features = ["zstdmt"] }
+
+
 
 [profile.release]
 opt-level = 3

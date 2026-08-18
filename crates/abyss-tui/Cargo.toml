@@ -3,10 +3,16 @@ name = "abyss-tui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Terminal frontend for the Abyss file manager"
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/abyss-tui"
+readme = "README.md"
+description = "Fast, cross-platform dual-pane terminal file manager for local, cloud, and Kubernetes storage"
+keywords = ["tui", "file-manager", "ratatui", "storage", "cloud"]
+categories = ["command-line-utilities", "filesystem"]
 default-run = "abyss"
+
 
 [[bin]]
 name = "abyss"
@@ -23,28 +29,24 @@ ftp = ["abyss-core/ftp"]
 remote = ["abyss-core/remote"]
 
 [dependencies]
-abyss-core = { path = "../abyss-core" }
+abyss-core.workspace = true
 # bat's curated syntax and theme assets, without its CLI: no clap, no git2, and
 # regex-fancy keeps highlighting pure Rust rather than linking oniguruma.
-bat = { version = "0.26", default-features = false, features = ["regex-fancy"] }
-cleaner-tui = { path = "../../../cleaner/crates/cleaner-tui", default-features = false }
-clap = { version = "4", features = ["derive"] }
-crossterm = "0.29"
-percent-encoding = "2.3.2"
-portable-pty = "0.9"
-quichash-core = { version = "0.1.0", path = "../../../quichash/crates/quichash-core" }
-ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
-shell-words = "1.1"
-syntect = { version = "5.3", default-features = false, features = [
-    "default-syntaxes",
-    "default-themes",
-    "regex-fancy",
-    "parsing",
-] }
-tempfile = "3"
-tui-term = { version = "0.3", default-features = false, features = ["vt100"] }
-sysinfo = "0.39"
-unicode-segmentation = "1.13.3"
-unicode-width = "0.2.2"
-vt100 = "0.16"
-zeroize = "1"
+bat.workspace = true
+cleaner-tui.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+percent-encoding.workspace = true
+portable-pty.workspace = true
+quichash-core.workspace = true
+ratatui.workspace = true
+shell-words.workspace = true
+syntect.workspace = true
+tempfile.workspace = true
+tui-term.workspace = true
+sysinfo.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+vt100.workspace = true
+zeroize.workspace = true
+

@@ -3,10 +3,16 @@ name = "abyss-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Frontend-neutral file, archive, hash, sync, and storage engine for Abyss"
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/abyss-core"
+readme = "README.md"
+description = "Frontend-neutral file, archive, hash, sync, and storage engine for Abyss"
+keywords = ["file-manager", "vfs", "archive", "storage", "sync"]
+categories = ["filesystem", "command-line-utilities"]
 autobins = false
+
 
 [features]
 default = ["remote"]
@@ -26,61 +32,56 @@ path = "src/bin/abyss-kube-helper.rs"
 required-features = ["kube-helper"]
 
 [dependencies]
-async-trait = { version = "0.1.92", optional = true }
-brotli = "8.0.4"
-bytes = "1.12.1"
-bzip2 = "0.6.1"
-ciborium = { version = "0.2.2", optional = true }
-blake3 = { version = "1.8", features = ["rayon", "std"] }
-rayon = "1.12"
-directories = "6.0.0"
-flate2 = "1.1.9"
-futures-util = { version = "0.3.34", optional = true }
+async-trait = { workspace = true, optional = true }
+brotli.workspace = true
+bytes.workspace = true
+bzip2.workspace = true
+ciborium = { workspace = true, optional = true }
+blake3.workspace = true
+rayon.workspace = true
+directories.workspace = true
+flate2.workspace = true
+futures-util = { workspace = true, optional = true }
 # ripgrep's own search libraries, and the gitignore-aware walker fd is built on.
-grep-regex = "0.1"
-grep-searcher = "0.1"
-ignore = "0.4"
-k8s-openapi = { version = "0.28.0", features = ["v1_36"], optional = true }
-kube = { version = "4.2.0", features = ["client", "config", "ring", "rustls-tls", "ws"], optional = true }
-libc = "0.2.189"
-lz4_flex = { version = "0.14.0", features = ["frame"] }
-lzma-rust2 = { version = "0.18.1", default-features = false, features = ["std", "encoder", "lzip", "xz"] }
-rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"], optional = true }
-percent-encoding = "2.3.2"
-quichash-core = { version = "0.1.0", path = "../../../quichash/crates/quichash-core" }
-serde = { version = "1.0.229", features = ["derive"] }
-similar = "3.1"
-serde_json = "1.0.151"
-sevenz-rust2 = "0.21.4"
-zstd = { version = "0.13", features = ["zstdmt"] }
-sha2 = "0.11.0"
-ssh2 = { version = "0.9.6", optional = true }
-signal-hook = "0.4"
-suppaftp = { version = "10.0.1", features = ["tokio-rustls-ring", "deprecated"], optional = true }
-tar = "0.4.46"
-tempfile = "3"
-tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"], optional = true }
-tokio-util = { version = "0.7.19", features = ["io"], optional = true }
-toml = "1.1.4"
-trash = "5.2.6"
-unarc-rs = "0.6.2"
-url = { version = "2.5.8", features = ["serde"] }
-uuid = { version = "1.24.1", features = ["v4", "serde"] }
-webpki-roots = { version = "1.0.9", optional = true }
-zeroize = "1"
-zip = { version = "8.6.0", default-features = false, features = ["aes-crypto", "bzip2", "deflate-flate2", "xz", "zstd"] }
-object_store = { version = "0.14.1", default-features = false, optional = true }
-lofty = "0.25.1"
-chrono = "0.4.45"
+grep-regex.workspace = true
+grep-searcher.workspace = true
+ignore.workspace = true
+k8s-openapi = { workspace = true, optional = true }
+kube = { workspace = true, optional = true }
+libc.workspace = true
+lz4_flex.workspace = true
+lzma-rust2.workspace = true
+rustls = { workspace = true, optional = true }
+percent-encoding.workspace = true
+quichash-core.workspace = true
+serde.workspace = true
+similar.workspace = true
+serde_json.workspace = true
+sevenz-rust2.workspace = true
+zstd.workspace = true
+sha2.workspace = true
+ssh2 = { workspace = true, optional = true }
+signal-hook.workspace = true
+suppaftp = { workspace = true, optional = true }
+tar.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+toml.workspace = true
+trash.workspace = true
+unarc-rs.workspace = true
+url.workspace = true
+uuid.workspace = true
+webpki-roots = { workspace = true, optional = true }
+zeroize.workspace = true
+zip.workspace = true
+object_store = { workspace = true, optional = true }
+lofty.workspace = true
+chrono.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = [
-    "Win32_Foundation",
-    "Win32_Storage_FileSystem",
-    "Win32_System_IO",
-    "Win32_System_Ioctl",
-    "Win32_System_SystemServices",
-] }
+windows-sys.workspace = true
+
