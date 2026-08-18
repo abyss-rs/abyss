@@ -63,5 +63,3 @@ cargo test --workspace --all-targets --all-features
 ## License
 
 Dual-licensed under [MIT](licenses/LICENSE-MIT) or [Apache-2.0](licenses/LICENSE-APACHE).
-
-Archive creation uses [Zstandard](https://facebook.github.io/zstd/) (libzstd) under the BSD license; see [NOTICE](licenses/NOTICE) and [LICENSE-ZSTD](licenses/LICENSE-ZSTD).
