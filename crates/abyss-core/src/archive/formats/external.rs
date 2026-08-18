@@ -38,8 +38,8 @@ pub fn discover_tool() -> Result<ExternalToolKind, ArchiveOpenError> {
         return Ok(ExternalToolKind::Unrar(path));
     }
 
-    // 2. Check 7z / 7zz / 7za
-    for name in ["7z", "7zz", "7za"] {
+    // 2. Check 7zz / 7z (prefer modern standalone 7zz with built-in RAR codec over legacy p7zip)
+    for name in ["7zz", "7z"] {
         if let Some(path) = find_binary_on_path(name) {
             return Ok(ExternalToolKind::SevenZip(path));
         }
@@ -205,6 +205,19 @@ fn validate_7z_password(
         .map_err(|e| ArchiveOpenError::Other(format!("Failed to validate password: {e}")))?;
 
     if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+        if combined.contains("wrong password")
+            || combined.contains("data error in encrypted file")
+            || combined.contains("crc failed in encrypted file")
+            || combined.contains("cannot open encrypted")
+            || combined.contains("incorrect password")
+        {
+            return Err(ArchiveOpenError::InvalidPassword(
+                "Invalid password for archive".to_string(),
+            ));
+        }
         return Err(ArchiveOpenError::InvalidPassword(
             "Invalid password for archive".to_string(),
         ));

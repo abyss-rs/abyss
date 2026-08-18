@@ -94,12 +94,12 @@ pub(super) fn validate_source(source: &Path, file: &File, expected: &Entry) -> R
 pub(super) fn set_file_times(file: &File, path: &Path, entry: &Entry) -> Result<(), Error> {
     let times = [
         libc::timespec {
-            tv_sec: entry.accessed_sec,
-            tv_nsec: entry.accessed_nsec,
+            tv_sec: entry.accessed_sec as libc::time_t,
+            tv_nsec: entry.accessed_nsec as libc::c_long,
         },
         libc::timespec {
-            tv_sec: entry.modified_sec,
-            tv_nsec: entry.modified_nsec,
+            tv_sec: entry.modified_sec as libc::time_t,
+            tv_nsec: entry.modified_nsec as libc::c_long,
         },
     ];
     if unsafe { libc::futimens(file.as_raw_fd(), times.as_ptr()) } == 0 {
@@ -119,12 +119,12 @@ pub(super) fn apply_symlink_times(path: &Path, entry: &Entry) -> Result<(), Erro
         .map_err(|_| Error::message(format!("path contains a NUL byte: {}", path.display())))?;
     let times = [
         libc::timespec {
-            tv_sec: entry.accessed_sec,
-            tv_nsec: entry.accessed_nsec,
+            tv_sec: entry.accessed_sec as libc::time_t,
+            tv_nsec: entry.accessed_nsec as libc::c_long,
         },
         libc::timespec {
-            tv_sec: entry.modified_sec,
-            tv_nsec: entry.modified_nsec,
+            tv_sec: entry.modified_sec as libc::time_t,
+            tv_nsec: entry.modified_nsec as libc::c_long,
         },
     ];
     let result = unsafe {
