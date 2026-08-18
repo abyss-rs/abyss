@@ -38,14 +38,12 @@ pub fn discover_tool() -> Result<ExternalToolKind, ArchiveOpenError> {
         return Ok(ExternalToolKind::Unrar(path));
     }
 
-    // 2. Check 7zz / 7z (prefer modern standalone 7zz with built-in RAR codec over legacy p7zip)
-    for name in ["7zz", "7z"] {
-        if let Some(path) = find_binary_on_path(name) {
-            return Ok(ExternalToolKind::SevenZip(path));
-        }
+    // 2. Check 7zz (modern standalone 7-Zip with built-in RAR codec)
+    if let Some(path) = find_binary_on_path("7zz") {
+        return Ok(ExternalToolKind::SevenZip(path));
     }
 
-    // 3. Check unar / lsar
+    // 3. Check unar / lsar (The Unarchiver)
     if let Some(unar_path) = find_binary_on_path("unar") {
         let lsar_path = find_binary_on_path("lsar");
         return Ok(ExternalToolKind::Unar {
@@ -54,7 +52,12 @@ pub fn discover_tool() -> Result<ExternalToolKind, ArchiveOpenError> {
         });
     }
 
-    // 4. Check rar
+    // 4. Check 7z (generic 7-Zip binary)
+    if let Some(path) = find_binary_on_path("7z") {
+        return Ok(ExternalToolKind::SevenZip(path));
+    }
+
+    // 5. Check rar
     if let Some(path) = find_binary_on_path("rar") {
         return Ok(ExternalToolKind::Rar(path));
     }
@@ -217,6 +220,14 @@ fn validate_7z_password(
             return Err(ArchiveOpenError::InvalidPassword(
                 "Invalid password for archive".to_string(),
             ));
+        }
+        if combined.contains("unsupported")
+            || combined.contains("no codec")
+            || combined.contains("can not open the file as archive")
+        {
+            return Err(ArchiveOpenError::Other(format!(
+                "7-Zip binary does not support decompressing this archive format: {stderr}"
+            )));
         }
         return Err(ArchiveOpenError::InvalidPassword(
             "Invalid password for archive".to_string(),
