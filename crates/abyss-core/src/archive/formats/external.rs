@@ -127,9 +127,9 @@ pub fn list_external_archive(
         ExternalToolKind::Unrar(bin) | ExternalToolKind::Rar(bin) => {
             list_with_unrar(&bin, path, password)
         }
-        ExternalToolKind::Unar { ref lsar, .. } => {
+        ExternalToolKind::Unar { ref unar, ref lsar } => {
             if let Some(lsar_bin) = lsar {
-                list_with_lsar(lsar_bin, path, password)
+                list_with_lsar(unar, lsar_bin, path, password)
             } else {
                 list_with_unrar_fallback(path, password)
             }
@@ -429,10 +429,119 @@ fn parse_unrar_lt_output(output: &str) -> Result<(Vec<ArchiveMember>, bool), Arc
 }
 
 fn list_with_lsar(
-    bin: &Path,
+    unar_bin: &Path,
+    lsar_bin: &Path,
     archive: &Path,
     password: Option<&str>,
 ) -> Result<Vec<ArchiveMember>, ArchiveOpenError> {
+    let mut cmd = Command::new(lsar_bin);
+    cmd.arg("-j");
+    if let Some(pass) = password {
+        cmd.arg("-p").arg(pass);
+    }
+    cmd.arg(archive);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let output = cmd
+        .output()
+        .map_err(|e| ArchiveOpenError::Other(format!("Failed to execute lsar: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+        if combined.contains("password") || combined.contains("encrypted") {
+            return Err(ArchiveOpenError::PasswordRequired(format!(
+                "Archive '{}' is encrypted",
+                archive.display()
+            )));
+        }
+        return Err(ArchiveOpenError::Other(format!("lsar error: {stderr}")));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (members, has_encrypted) = match parse_lsar_json(&stdout) {
+        Ok(res) => res,
+        Err(_) => list_with_lsar_fallback_parse(lsar_bin, archive, password)?,
+    };
+
+    if has_encrypted {
+        match password {
+            None => {
+                return Err(ArchiveOpenError::PasswordRequired(format!(
+                    "Archive '{}' contains encrypted entries",
+                    archive.display()
+                )));
+            }
+            Some(pass) => {
+                validate_unar_password(unar_bin, archive, pass)?;
+            }
+        }
+    }
+
+    Ok(members)
+}
+
+fn parse_lsar_json(output: &str) -> Result<(Vec<ArchiveMember>, bool), ArchiveOpenError> {
+    let val: serde_json::Value = serde_json::from_str(output)
+        .map_err(|e| ArchiveOpenError::Other(format!("Failed to parse lsar json: {e}")))?;
+
+    let mut members = Vec::new();
+    let mut any_encrypted = false;
+
+    if let Some(contents) = val.get("lsarContents").and_then(|c| c.as_array()) {
+        for entry in contents {
+            let name = entry
+                .get("XADFileName")
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
+            let size = entry
+                .get("XADFileSize")
+                .and_then(|s| s.as_u64())
+                .unwrap_or(0);
+            let is_dir = entry
+                .get("XADIsDirectory")
+                .and_then(|d| d.as_u64())
+                .unwrap_or(0)
+                == 1
+                || entry
+                    .get("XADIsDirectory")
+                    .and_then(|d| d.as_bool())
+                    .unwrap_or(false);
+            let is_enc = entry
+                .get("XADIsEncrypted")
+                .and_then(|e| e.as_u64())
+                .unwrap_or(0)
+                == 1
+                || entry
+                    .get("XADIsEncrypted")
+                    .and_then(|e| e.as_bool())
+                    .unwrap_or(false);
+
+            if is_enc {
+                any_encrypted = true;
+            }
+
+            if let Some(norm_path) = normalize_member_path(name) {
+                members.push(ArchiveMember {
+                    path: norm_path,
+                    size,
+                    is_directory: is_dir,
+                });
+            }
+        }
+    }
+
+    Ok((members, any_encrypted))
+}
+
+fn list_with_lsar_fallback_parse(
+    bin: &Path,
+    archive: &Path,
+    password: Option<&str>,
+) -> Result<(Vec<ArchiveMember>, bool), ArchiveOpenError> {
     let mut cmd = Command::new(bin);
     cmd.arg("-l");
     if let Some(pass) = password {
@@ -454,8 +563,8 @@ fn list_with_lsar(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut members = Vec::new();
+    let mut any_encrypted = false;
 
-    // lsar -l output lines: size flags timestamp name
     for line in stdout.lines().skip(1) {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -466,7 +575,13 @@ fn list_with_lsar(
             let size = parts[0].parse::<u64>().unwrap_or(0);
             let flags = parts[1];
             let is_directory = flags.contains('d') || flags.contains('D');
-            // The file name is everything after timestamp
+            if flags.contains('e')
+                || flags.contains('E')
+                || flags.contains('*')
+                || flags.contains("enc")
+            {
+                any_encrypted = true;
+            }
             let name = parts[3..].join(" ");
             if let Some(norm_path) = normalize_member_path(&name) {
                 members.push(ArchiveMember {
@@ -478,7 +593,45 @@ fn list_with_lsar(
         }
     }
 
-    Ok(members)
+    Ok((members, any_encrypted))
+}
+
+fn validate_unar_password(
+    unar_bin: &Path,
+    archive: &Path,
+    password: &str,
+) -> Result<(), ArchiveOpenError> {
+    let mut cmd = Command::new(unar_bin);
+    cmd.arg("-t").arg("-p").arg(password).arg(archive);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let output = cmd
+        .output()
+        .map_err(|e| ArchiveOpenError::Other(format!("Failed to execute unar: {e}")))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+        if combined.contains("password")
+            || combined.contains("wrong")
+            || combined.contains("failed")
+            || combined.contains("crc")
+            || combined.contains("data error")
+            || combined.contains("checksum")
+            || combined.contains("incorrect")
+        {
+            return Err(ArchiveOpenError::InvalidPassword(
+                "Invalid password for archive".to_string(),
+            ));
+        }
+        return Err(ArchiveOpenError::InvalidPassword(
+            "Invalid password for archive".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn list_with_unrar_fallback(
