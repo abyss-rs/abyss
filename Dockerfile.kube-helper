@@ -6,6 +6,7 @@ WORKDIR /build
 COPY kube-helper/Cargo.toml Cargo.toml
 COPY kube-helper/Cargo.lock Cargo.lock
 COPY crates/abyss-core/src/bin/abyss-kube-helper.rs src/main.rs
+COPY crates/abyss-core/src/bin/abyss-kube-helper src/abyss-kube-helper
 COPY crates/abyss-core/src/storage/helper_protocol.rs storage/helper_protocol.rs
 RUN case "$TARGETARCH" in \
       amd64) target=x86_64-unknown-linux-musl ;; \
