@@ -1,96 +1,39 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-use ssh2::{FileStat, RenameFlags, Sftp};
+use russh_sftp::protocol::FileAttributes;
 
 use crate::storage::{EntryKind, ErrorKind, StorageEntry, StorageError};
 
-pub(crate) fn sftp_rename(
-    sftp: &Sftp,
-    source: &Path,
-    destination: &Path,
-    overwrite: bool,
-) -> Result<(), StorageError> {
-    let mut flags = RenameFlags::ATOMIC | RenameFlags::NATIVE;
-    if overwrite {
-        flags |= RenameFlags::OVERWRITE;
-    }
-    if sftp.rename(source, destination, Some(flags)).is_ok() {
-        return Ok(());
-    }
-    if overwrite {
-        let _ = sftp.unlink(destination);
-    }
-    sftp.rename(source, destination, None)
-        .map_err(map_ssh_error)
-}
+pub(crate) fn storage_entry(name: Vec<u8>, attrs: &FileAttributes) -> StorageEntry {
+    let is_dir = attrs.is_dir();
+    let is_file = attrs.is_regular();
+    let is_symlink = attrs.is_symlink();
 
-pub(crate) fn mkdir_p(sftp: &Sftp, path: &Path) -> Result<(), StorageError> {
-    if sftp.stat(path).is_ok() {
-        return Ok(());
-    }
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty() && *parent != Path::new("/"))
-    {
-        let _ = mkdir_p(sftp, parent);
-    }
-    match sftp.mkdir(path, 0o755) {
-        Ok(_) => Ok(()),
-        Err(_) if sftp.stat(path).is_ok() => Ok(()),
-        Err(error) => Err(map_ssh_error(error)),
-    }
-}
-
-pub(crate) fn delete_sftp_path(
-    sftp: &Sftp,
-    path: &Path,
-    recursive: bool,
-) -> Result<(), StorageError> {
-    let stat = sftp.stat(path).map_err(map_ssh_error)?;
-    if stat.is_dir() {
-        if recursive {
-            for (child, _) in sftp.readdir(path).map_err(map_ssh_error)? {
-                let Some(name) = child.file_name() else {
-                    continue;
-                };
-                if matches!(name.as_encoded_bytes(), b"." | b"..") {
-                    continue;
-                }
-                delete_sftp_path(sftp, &child, true)?;
-            }
-        }
-        sftp.rmdir(path).map_err(map_ssh_error)
-    } else {
-        sftp.unlink(path).map_err(map_ssh_error)
-    }
-}
-
-pub(crate) fn storage_entry(name: Vec<u8>, stat: &FileStat) -> StorageEntry {
     StorageEntry {
         name,
-        kind: if stat.is_dir() {
+        kind: if is_dir {
             EntryKind::Directory
-        } else if stat.is_file() {
+        } else if is_file {
             EntryKind::File
-        } else if stat.file_type().is_symlink() {
+        } else if is_symlink {
             EntryKind::Symlink
         } else {
             EntryKind::Other
         },
-        size: stat.size,
-        modified: stat
+        size: attrs.size,
+        modified: attrs
             .mtime
-            .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds)),
-        version: Some(stat_version(stat)),
+            .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds as u64)),
+        version: Some(stat_version(attrs)),
     }
 }
 
-pub(crate) fn stat_version(stat: &FileStat) -> String {
+pub(crate) fn stat_version(attrs: &FileAttributes) -> String {
     format!(
         "{}:{}",
-        stat.size.unwrap_or_default(),
-        stat.mtime.unwrap_or_default()
+        attrs.size.unwrap_or_default(),
+        attrs.mtime.unwrap_or_default()
     )
 }
 
@@ -106,22 +49,46 @@ pub(crate) fn default_known_hosts() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|directories| directories.home_dir().join(".ssh/known_hosts"))
 }
 
-pub(crate) fn map_ssh_error(error: ssh2::Error) -> StorageError {
-    let message = error.message().to_ascii_lowercase();
-    let kind = if message.contains("authentication") || message.contains("publickey") {
+pub(crate) fn map_russh_error(error: russh::Error) -> StorageError {
+    let message = error.to_string();
+    let lower = message.to_ascii_lowercase();
+    let kind = if lower.contains("auth")
+        || lower.contains("publickey")
+        || lower.contains("denied")
+        || lower.contains("server key")
+        || lower.contains("key mismatch")
+    {
         ErrorKind::Authentication
-    } else if message.contains("permission") {
+    } else if lower.contains("permission") {
         ErrorKind::PermissionDenied
-    } else if message.contains("not found") || message.contains("no such") {
+    } else if lower.contains("not found") || lower.contains("no such") {
         ErrorKind::NotFound
-    } else if message.contains("exist") {
+    } else if lower.contains("exist") {
         ErrorKind::AlreadyExists
-    } else if message.contains("timeout") {
+    } else if lower.contains("timeout") || lower.contains("timed out") {
         ErrorKind::Timeout
     } else {
         ErrorKind::Transport
     };
-    StorageError::new(kind, format!("SFTP: {}", error.message()))
+    StorageError::new(kind, format!("SFTP SSH: {message}"))
+        .retryable(matches!(kind, ErrorKind::Timeout | ErrorKind::Transport))
+}
+
+pub(crate) fn map_sftp_error(error: russh_sftp::client::error::Error) -> StorageError {
+    let message = error.to_string();
+    let lower = message.to_ascii_lowercase();
+    let kind = if lower.contains("not found") || lower.contains("no such") {
+        ErrorKind::NotFound
+    } else if lower.contains("permission") || lower.contains("denied") {
+        ErrorKind::PermissionDenied
+    } else if lower.contains("already exists") || lower.contains("exist") {
+        ErrorKind::AlreadyExists
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        ErrorKind::Timeout
+    } else {
+        ErrorKind::Transport
+    };
+    StorageError::new(kind, format!("SFTP: {message}"))
         .retryable(matches!(kind, ErrorKind::Timeout | ErrorKind::Transport))
 }
 
@@ -135,8 +102,4 @@ pub(crate) fn map_sftp_io(error: std::io::Error) -> StorageError {
     };
     StorageError::new(kind, format!("SFTP I/O: {error}"))
         .retryable(matches!(kind, ErrorKind::Timeout | ErrorKind::Transport))
-}
-
-pub(crate) fn join_error(error: tokio::task::JoinError) -> StorageError {
-    StorageError::new(ErrorKind::Other, format!("SFTP worker failed: {error}"))
 }

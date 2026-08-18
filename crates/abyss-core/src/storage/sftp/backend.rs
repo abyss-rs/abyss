@@ -1,12 +1,96 @@
-use std::net::TcpStream;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
-use ssh2::{CheckResult, KnownHostFileKind, Session, Sftp};
+use russh::client::{self, Handle, Handler};
+use russh_sftp::client::SftpSession;
 use zeroize::Zeroize;
 
-use super::util::{default_known_hosts, map_sftp_io, map_ssh_error};
+use super::util::{default_known_hosts, map_russh_error, map_sftp_error};
 use crate::storage::{ErrorKind, SftpConnection, StorageError, StoragePath};
+
+pub struct SftpClientHandler {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) known_hosts: Option<PathBuf>,
+    pub(crate) accept_new_host_keys: bool,
+}
+
+impl Handler for SftpClientHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &russh::keys::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let known_hosts_path = self.known_hosts.clone().or_else(default_known_hosts);
+        let Some(path) = known_hosts_path else {
+            return Ok(self.accept_new_host_keys);
+        };
+
+        if path.exists()
+            && let Ok(file_content) = std::fs::read_to_string(&path)
+        {
+            let host_pattern = if self.port == 22 {
+                self.host.clone()
+            } else {
+                format!("[{}]:{}", self.host, self.port)
+            };
+            for line in file_content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let hosts = parts[0];
+                    let matches = hosts
+                        .split(',')
+                        .any(|h| h == host_pattern || h == self.host);
+                    if matches {
+                        let key_str = if parts.len() >= 3 {
+                            format!("{} {}", parts[1], parts[2])
+                        } else {
+                            parts[1].to_string()
+                        };
+                        if let Ok(known_key) = russh::keys::PublicKey::from_openssh(&key_str) {
+                            if &known_key == server_public_key {
+                                return Ok(true);
+                            } else {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if self.accept_new_host_keys {
+            let host_str = if self.port == 22 {
+                self.host.clone()
+            } else {
+                format!("[{}]:{}", self.host, self.port)
+            };
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(openssh_key) = server_public_key.to_openssh() {
+                let line = format!("{host_str} {openssh_key}\n");
+                use std::io::Write;
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                {
+                    let _ = file.write_all(line.as_bytes());
+                }
+            }
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+}
 
 #[derive(Clone)]
 pub struct SftpBackend {
@@ -34,50 +118,94 @@ impl SftpBackend {
         Ok(result)
     }
 
-    pub(crate) fn connect(&self) -> Result<(Session, Sftp), StorageError> {
-        let address = format!("{}:{}", self.connection.host, self.connection.port);
-        let tcp = TcpStream::connect(&address).map_err(map_sftp_io)?;
-        tcp.set_read_timeout(Some(Duration::from_secs(30)))
-            .map_err(map_sftp_io)?;
-        tcp.set_write_timeout(Some(Duration::from_secs(30)))
-            .map_err(map_sftp_io)?;
-        let mut session = Session::new().map_err(map_ssh_error)?;
-        session.set_tcp_stream(tcp);
-        session.set_timeout(30_000);
-        session.handshake().map_err(map_ssh_error)?;
-        self.verify_host(&session)?;
+    pub(crate) async fn connect(
+        &self,
+    ) -> Result<(Handle<SftpClientHandler>, SftpSession), StorageError> {
+        let config = russh::client::Config {
+            inactivity_timeout: Some(Duration::from_secs(30)),
+            ..Default::default()
+        };
+        let config = Arc::new(config);
+
+        let handler = SftpClientHandler {
+            host: self.connection.host.clone(),
+            port: self.connection.port,
+            known_hosts: self.connection.known_hosts.clone(),
+            accept_new_host_keys: self.connection.accept_new_host_keys,
+        };
+
+        let address = (self.connection.host.as_str(), self.connection.port);
+        let mut session = client::connect(config, address, handler)
+            .await
+            .map_err(map_russh_error)?;
 
         let mut password = self.secret()?;
-        let _ = session.userauth_agent(&self.connection.username);
-        if !session.authenticated()
-            && let Some(private_key) = &self.connection.private_key
-        {
-            let _ = session.userauth_pubkey_file(
-                &self.connection.username,
-                None,
-                private_key,
-                password.as_deref(),
-            );
+        let mut authenticated = false;
+
+        // 1. Try private key authentication
+        let key_paths: Vec<PathBuf> = if let Some(path) = &self.connection.private_key {
+            vec![path.clone()]
+        } else if let Some(base_dirs) = directories::BaseDirs::new() {
+            let ssh_dir = base_dirs.home_dir().join(".ssh");
+            vec![
+                ssh_dir.join("id_ed25519"),
+                ssh_dir.join("id_rsa"),
+                ssh_dir.join("id_ecdsa"),
+            ]
+        } else {
+            vec![]
+        };
+
+        for key_path in key_paths {
+            if key_path.exists()
+                && let Ok(key) = russh::keys::load_secret_key(&key_path, password.as_deref())
+                && let Ok(auth_result) = session
+                    .authenticate_publickey(
+                        &self.connection.username,
+                        russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), None),
+                    )
+                    .await
+                && auth_result.success()
+            {
+                authenticated = true;
+                break;
+            }
         }
-        if !session.authenticated()
+
+        // 2. Try password authentication
+        if !authenticated
             && let Some(value) = password.as_deref()
+            && let Ok(auth_result) = session
+                .authenticate_password(&self.connection.username, value)
+                .await
         {
-            session
-                .userauth_password(&self.connection.username, value)
-                .map_err(|_| {
-                    StorageError::new(ErrorKind::Authentication, "SFTP authentication failed")
-                })?;
+            authenticated = auth_result.success();
         }
+
         if let Some(value) = &mut password {
             value.zeroize();
         }
-        if !session.authenticated() {
+
+        if !authenticated {
             return Err(StorageError::new(
                 ErrorKind::Authentication,
                 "SFTP authentication failed; check the SSH agent, key, or password helper",
             ));
         }
-        let sftp = session.sftp().map_err(map_ssh_error)?;
+
+        let channel = session
+            .channel_open_session()
+            .await
+            .map_err(map_russh_error)?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(map_russh_error)?;
+
+        let sftp = SftpSession::new(channel.into_stream())
+            .await
+            .map_err(map_sftp_error)?;
+
         Ok((session, sftp))
     }
 
@@ -123,62 +251,5 @@ impl SftpBackend {
         let length = secret.trim_end_matches(['\r', '\n']).len();
         secret.truncate(length);
         Ok(Some(secret))
-    }
-
-    fn verify_host(&self, session: &Session) -> Result<(), StorageError> {
-        let (key, key_type) = session.host_key().ok_or_else(|| {
-            StorageError::new(ErrorKind::Transport, "SSH server returned no host key")
-        })?;
-        let path = self
-            .connection
-            .known_hosts
-            .clone()
-            .or_else(default_known_hosts)
-            .ok_or_else(|| {
-                StorageError::new(
-                    ErrorKind::Authentication,
-                    "could not determine the SSH known_hosts path",
-                )
-            })?;
-        let mut hosts = session.known_hosts().map_err(map_ssh_error)?;
-        if path.exists() {
-            hosts
-                .read_file(&path, KnownHostFileKind::OpenSSH)
-                .map_err(map_ssh_error)?;
-        }
-        match hosts.check_port(&self.connection.host, self.connection.port, key) {
-            CheckResult::Match => Ok(()),
-            CheckResult::Mismatch => Err(StorageError::new(
-                ErrorKind::Authentication,
-                "SFTP host key does not match known_hosts",
-            )),
-            CheckResult::Failure => Err(StorageError::new(
-                ErrorKind::Authentication,
-                "SFTP host key could not be checked",
-            )),
-            CheckResult::NotFound if !self.connection.accept_new_host_keys => {
-                Err(StorageError::new(
-                    ErrorKind::Authentication,
-                    format!(
-                        "SFTP host key is not trusted; add it to {} or set accept_new_host_keys",
-                        path.display()
-                    ),
-                ))
-            }
-            CheckResult::NotFound => {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).map_err(map_sftp_io)?;
-                }
-                let host = if self.connection.port == 22 {
-                    self.connection.host.clone()
-                } else {
-                    format!("[{}]:{}", self.connection.host, self.connection.port)
-                };
-                hosts
-                    .add(&host, key, "added by Abyss", key_type.into())
-                    .and_then(|()| hosts.write_file(&path, KnownHostFileKind::OpenSSH))
-                    .map_err(map_ssh_error)
-            }
-        }
     }
 }

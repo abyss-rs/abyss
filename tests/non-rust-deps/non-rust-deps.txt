@@ -14,20 +14,6 @@ or link non-Rust source code (C, C++, Assembly) or provide raw C FFI bindings.
   * Dependency Path: abyss-core -> rustls / kube / suppaftp -> ring
   * Purpose: Hardware-accelerated cryptographic primitives for pure-Rust TLS (AES, ChaCha20, SHA2, Ed25519).
 
-- libssh2-sys (v0.3.2) [OPTIONAL - Feature: 'sftp']
-  * Language: C
-  * Upstream: libssh2 (libssh2.org)
-  * Dependency Path: abyss-core -> ssh2 -> libssh2-sys
-  * Purpose: SSH2 / SFTP remote transport.
-  * Status: Gated behind optional 'sftp' feature (disabled by default in CI/release).
-
-- openssl-sys (v0.9.117) [OPTIONAL - Feature: 'sftp']
-  * Language: C
-  * Upstream: OpenSSL Project
-  * Dependency Path: abyss-core -> ssh2 -> libssh2-sys -> openssl-sys
-  * Purpose: Cryptographic backend for C libssh2.
-  * Status: Gated behind optional 'sftp' feature.
-
 ===============================================================================
 3. Direct OS C FFI Bindings (Pure Rust definitions calling OS C libraries)
 ===============================================================================

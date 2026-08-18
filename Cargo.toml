@@ -58,7 +58,8 @@ sha2 = "0.11.0"
 shell-words = "1.1"
 signal-hook = "0.4"
 similar = "3.2"
-ssh2 = "0.9.6"
+russh = { version = "0.62", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "2.4"
 suppaftp = { version = "10.0.1", features = ["tokio-rustls-ring", "deprecated"] }
 syntect = { version = "5.3", default-features = false, features = [
     "default-syntaxes",
