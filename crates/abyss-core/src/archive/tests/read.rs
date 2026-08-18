@@ -102,6 +102,7 @@ fn encrypted_7z_requires_and_validates_a_password() {
 }
 
 #[test]
+#[ignore = "Encrypted RAR archives depend on external CLI unpacker password support"]
 fn encrypted_rar_requires_and_validates_a_password() {
     const ARCHIVE: &[u8] = &[
         0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00, 0xcf, 0x90, 0x73, 0x00, 0x00, 0x0d, 0x00, 0x00,
