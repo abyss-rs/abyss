@@ -152,7 +152,10 @@ fn treats_standalone_gzip_as_one_named_member() {
 fn treats_standalone_zstd_as_one_named_member() {
     let temp = TempDir::new();
     let path = temp.path().join("video.raw.zst");
-    let compressed = zstd::stream::encode_all(&b"zstandard payload"[..], 1).unwrap();
+    let compressed = structured_zstd::encoding::compress_to_vec(
+        &b"zstandard payload"[..],
+        structured_zstd::encoding::CompressionLevel::from_level(1),
+    );
     std::fs::write(&path, compressed).unwrap();
 
     let index = ArchiveIndex::open(&path, None).unwrap();

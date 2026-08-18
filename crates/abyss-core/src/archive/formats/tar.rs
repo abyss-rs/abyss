@@ -318,8 +318,10 @@ pub(crate) fn compressed_reader(path: &Path, format: ArchiveFormat) -> io::Resul
         ArchiveFormat::TarXz | ArchiveFormat::Xz => Ok(Box::new(XzReader::new(reader, true))),
         ArchiveFormat::TarLzip | ArchiveFormat::Lzip => Ok(Box::new(LzipReader::new(reader))),
         ArchiveFormat::TarZstd | ArchiveFormat::Zstd => {
-            // libzstd skips trailing skippable frames (embedded TOC) correctly.
-            Ok(Box::new(zstd::stream::read::Decoder::new(reader)?))
+            // structured-zstd skips trailing skippable frames (embedded TOC) correctly.
+            let decoder = structured_zstd::decoding::StreamingDecoder::new(reader)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{err:?}")))?;
+            Ok(Box::new(decoder))
         }
         ArchiveFormat::TarLz4 | ArchiveFormat::Lz4 => Ok(Box::new(FrameDecoder::new(reader))),
         ArchiveFormat::TarBrotli | ArchiveFormat::Brotli => {

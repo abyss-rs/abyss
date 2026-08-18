@@ -1,0 +1,47 @@
+# Non-Rust Components & C/C++/Assembly Dependencies in Abyss
+# Generated: 2026-08-18 (Updated: Zstandard -> structured-zstd, RAR -> External Multi-CLI Engine)
+
+This document lists all dependencies in the Abyss dependency tree that compile
+or link non-Rust source code (C, C++, Assembly) or provide raw C FFI bindings.
+
+===============================================================================
+1. C & Assembly Native Libraries (Compiled via cc / build.rs)
+===============================================================================
+
+- lzma-sys (v0.1.20) [via quichash-core]
+  * Language: C
+  * Upstream: XZ Utils / liblzma
+  * Purpose: LZMA / XZ hashing in quichash-core.
+
+- ring (v0.17.14)
+  * Language: C, Assembly (x86_64, aarch64, armv7), and Rust
+  * Upstream: BoringSSL crypto core extracted into Ring
+  * Dependency Path: abyss-core -> rustls / kube / suppaftp -> ring
+  * Purpose: Hardware-accelerated cryptographic primitives for pure-Rust TLS (AES, ChaCha20, SHA2, Ed25519).
+
+- libssh2-sys (v0.3.2) [OPTIONAL - Feature: 'sftp']
+  * Language: C
+  * Upstream: libssh2 (libssh2.org)
+  * Dependency Path: abyss-core -> ssh2 -> libssh2-sys
+  * Purpose: SSH2 / SFTP remote transport.
+  * Status: Gated behind optional 'sftp' feature (disabled by default in CI/release).
+
+- openssl-sys (v0.9.117) [OPTIONAL - Feature: 'sftp']
+  * Language: C
+  * Upstream: OpenSSL Project
+  * Dependency Path: abyss-core -> ssh2 -> libssh2-sys -> openssl-sys
+  * Purpose: Cryptographic backend for C libssh2.
+  * Status: Gated behind optional 'sftp' feature.
+
+===============================================================================
+3. Direct OS C FFI Bindings (Pure Rust definitions calling OS C libraries)
+===============================================================================
+
+- libc (v0.2.189)
+  * Raw FFI definitions to the host platform C standard library (glibc, musl, libSystem, MSVCRT).
+
+- security-framework-sys (v2.17.0) [macOS only]
+  * Raw FFI bindings to Apple macOS Security.framework and CoreFoundation.
+
+- windows-sys (v0.60.2) [Windows only]
+  * Raw FFI bindings to Windows Win32 and NT kernel DLLs (kernel32, ntdll, advapi32).

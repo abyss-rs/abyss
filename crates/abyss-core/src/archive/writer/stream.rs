@@ -19,24 +19,12 @@ use crate::progress::{CopyStats, OperationPhase};
 pub(crate) fn create_zstd_encoder<W: Write>(
     sink: W,
     level: i32,
-    threads: CompressionThreads,
-) -> Result<zstd::stream::write::Encoder<'static, W>, Error> {
-    let mut encoder = zstd::stream::write::Encoder::new(sink, level)
-        .map_err(|error| Error::message(format!("initialize zstd encoder: {error}")))?;
-    // libzstd MT: one job thread per worker; keep a core free for I/O/UI.
-    let available = std::thread::available_parallelism()
-        .map(|value| value.get())
-        .unwrap_or(1);
-    let workers = match threads {
-        CompressionThreads::Auto => available.saturating_sub(1).clamp(1, 8),
-        CompressionThreads::Count(count) => usize::from(count).clamp(1, available),
-    } as u32;
-    if workers > 1 {
-        encoder
-            .multithread(workers)
-            .map_err(|error| Error::message(format!("enable zstd multithreading: {error}")))?;
-    }
-    Ok(encoder)
+    _threads: CompressionThreads,
+) -> Result<structured_zstd::encoding::StreamingEncoder<W>, Error> {
+    let comp_level = structured_zstd::encoding::CompressionLevel::from_level(level);
+    Ok(structured_zstd::encoding::StreamingEncoder::new(
+        sink, comp_level,
+    ))
 }
 
 /// Counts compressed bytes as they leave the encoder (before disk buffering).
