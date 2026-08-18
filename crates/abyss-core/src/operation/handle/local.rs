@@ -101,7 +101,7 @@ impl OperationHandle {
                 #[cfg(not(feature = "tokio"))]
                 _ => {
                     let _ = (storage, source, destination);
-                    Err(Error::message(
+                    Err(crate::Error::message(
                         "remote storage is disabled in this build; build with --features remote",
                     ))
                 }

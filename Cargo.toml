@@ -16,11 +16,10 @@ repository = "https://github.com/vyrti/abyss"
 homepage = "https://github.com/vyrti/abyss"
 
 [workspace.dependencies]
-# Local workspace and sibling crates
+# Local workspace crates
 abyss-core = { version = "0.1.0", path = "crates/abyss-core" }
-cleaner-tui = { version = "0.1.0", path = "../cleaner/crates/cleaner-tui", default-features = false }
-quichash-core = { version = "0.1.0", path = "../quichash/crates/quichash-core" }
-
+cleaner-tui = { version = "0.1.0", default-features = false }
+quichash-core = "0.1.0"
 
 # External crates
 async-trait = "0.1.92"

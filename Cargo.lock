@@ -720,6 +720,8 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 [[package]]
 name = "cleaner-core"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b188cdfbb89cec7e606a2106b2d5843f8f24052dd160fd000ef0ef2ca6813e8"
 dependencies = [
  "crossbeam-channel",
  "dirs",
@@ -735,6 +737,8 @@ dependencies = [
 [[package]]
 name = "cleaner-tui"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b98f99c092b37c482abe2be71e5760037575e80cb63cbf344144bd53a0cd7a8"
 dependencies = [
  "clap",
  "cleaner-core",
@@ -3222,6 +3226,8 @@ dependencies = [
 [[package]]
 name = "quichash-core"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49868d25e14f8280cd02e3dc8eae7f8a96ee40629a23c389c0d6894e8d0657a3"
 dependencies = [
  "blake2",
  "blake3",
@@ -4358,7 +4364,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
