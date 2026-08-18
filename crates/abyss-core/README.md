@@ -8,7 +8,7 @@ Frontend-neutral file, archive, hash, sync, and storage engine for Abyss.
 
 ## Features
 
-- **Multi-Cloud & Remote VFS**: Unified asynchronous abstraction over local filesystems, S3, Azure Blob, Google Cloud Storage, SFTP, FTP, and Kubernetes PVC storage.
+- **Multi-Cloud & Remote VFS**: Unified asynchronous abstraction over local filesystems, S3, Azure Blob, Google Cloud Storage, FTP, and Kubernetes PVC storage.
 - **Delta Sync Engine**: Fast rolling-checksum differential synchronization using BLAKE3 SIMD.
 - **Archive VFS**: Unified archive inspection, navigation, and extraction across 25+ archive formats.
 - **Zero-Copy Acceleration**: Platform-native copy-on-write acceleration (macOS `clonefile`, Linux `copy_file_range`, Windows `IoCopyFile`).

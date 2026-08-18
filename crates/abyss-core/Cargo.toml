@@ -23,7 +23,7 @@ gcs = ["dep:object_store", "object_store/gcp", "tokio"]
 kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:ciborium", "tokio"]
 sftp = ["dep:ssh2", "tokio"]
 ftp = ["dep:suppaftp", "dep:webpki-roots", "tokio"]
-remote = ["s3", "azure", "gcs", "kubernetes", "sftp", "ftp"]
+remote = ["s3", "azure", "gcs", "kubernetes", "ftp"]
 kube-helper = ["kubernetes"]
 
 [[bin]]

@@ -13,9 +13,11 @@ fn configured_backend_contract() {
 mod remote_contract {
     use std::sync::Arc;
 
+    #[cfg(feature = "sftp")]
+    use abyss_core::storage::SftpConnection;
     use abyss_core::storage::{
         Connection, ConnectionConfig, FtpConnection, FtpMode, KubernetesConnection, Location,
-        LocationCodec, NamedConnection, S3Connection, S3Preset, SftpConnection, StorageRuntime,
+        LocationCodec, NamedConnection, S3Connection, S3Preset, StorageRuntime,
     };
     use uuid::Uuid;
 
@@ -123,37 +125,44 @@ mod remote_contract {
                 StorageRuntime::load_default().expect("load connection configuration")
             }
         } else if root.scheme == "sftp" {
-            let directory = tempfile::tempdir().expect("create temporary config directory");
-            let path = directory.path().join("connections.toml");
-            ConnectionConfig {
-                version: 1,
-                connections: vec![NamedConnection {
-                    id: root.connection.clone(),
-                    name: "SFTP contract".to_owned(),
-                    connection: Connection::Sftp(SftpConnection {
-                        host: std::env::var("ABYSS_SFTP_HOST")
-                            .unwrap_or_else(|_| "127.0.0.1".to_owned()),
-                        port: std::env::var("ABYSS_SFTP_PORT")
-                            .ok()
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(2222),
-                        username: std::env::var("ABYSS_SFTP_USER")
-                            .unwrap_or_else(|_| "testuser".to_owned()),
-                        root: std::env::var("ABYSS_SFTP_ROOT")
-                            .unwrap_or_else(|_| "/upload".to_owned()),
-                        private_key: None,
-                        password_env: Some("ABYSS_SFTP_PASSWORD".to_owned()),
-                        password_command: vec![],
-                        known_hosts: Some(directory.path().join("known_hosts")),
-                        accept_new_host_keys: true,
-                    }),
-                }],
+            #[cfg(feature = "sftp")]
+            {
+                let directory = tempfile::tempdir().expect("create temporary config directory");
+                let path = directory.path().join("connections.toml");
+                ConnectionConfig {
+                    version: 1,
+                    connections: vec![NamedConnection {
+                        id: root.connection.clone(),
+                        name: "SFTP contract".to_owned(),
+                        connection: Connection::Sftp(SftpConnection {
+                            host: std::env::var("ABYSS_SFTP_HOST")
+                                .unwrap_or_else(|_| "127.0.0.1".to_owned()),
+                            port: std::env::var("ABYSS_SFTP_PORT")
+                                .ok()
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(2222),
+                            username: std::env::var("ABYSS_SFTP_USER")
+                                .unwrap_or_else(|_| "testuser".to_owned()),
+                            root: std::env::var("ABYSS_SFTP_ROOT")
+                                .unwrap_or_else(|_| "/upload".to_owned()),
+                            private_key: None,
+                            password_env: Some("ABYSS_SFTP_PASSWORD".to_owned()),
+                            password_command: vec![],
+                            known_hosts: Some(directory.path().join("known_hosts")),
+                            accept_new_host_keys: true,
+                        }),
+                    }],
+                }
+                .save(&path)
+                .expect("save temporary SFTP connection");
+                let runtime = StorageRuntime::load(&path).expect("load temporary SFTP connection");
+                temporary_config = Some(directory);
+                runtime
             }
-            .save(&path)
-            .expect("save temporary SFTP connection");
-            let runtime = StorageRuntime::load(&path).expect("load temporary SFTP connection");
-            temporary_config = Some(directory);
-            runtime
+            #[cfg(not(feature = "sftp"))]
+            {
+                panic!("SFTP support is not enabled in this build");
+            }
         } else if root.scheme == "ftp" || root.scheme == "ftps" {
             let directory = tempfile::tempdir().expect("create temporary config directory");
             let path = directory.path().join("connections.toml");

@@ -128,9 +128,11 @@ helper_images = [
 #[cfg(feature = "remote")]
 #[test]
 fn all_connection_types_round_trip_through_toml() {
+    #[cfg(feature = "sftp")]
+    use crate::storage::SftpConnection;
     use crate::storage::{
         AzureConnection, AzureCredentialSource, AzureMode, Connection, FtpConnection, FtpMode,
-        GcsConnection, KubernetesConnection, S3Connection, S3Preset, SftpConnection,
+        GcsConnection, KubernetesConnection, S3Connection, S3Preset,
     };
 
     let config = ConnectionConfig {
@@ -188,6 +190,7 @@ fn all_connection_types_round_trip_through_toml() {
                     migration_workers: 4,
                 }),
             },
+            #[cfg(feature = "sftp")]
             NamedConnection {
                 id: "sftp-test".to_owned(),
                 name: "SFTP".to_owned(),
