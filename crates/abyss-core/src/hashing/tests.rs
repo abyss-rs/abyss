@@ -115,8 +115,18 @@ fn creates_compressed_qh_and_hashdeep_with_canonical_suffixes() {
     fs::write(&source, b"one").unwrap();
     let cancelled = AtomicBool::new(false);
     for (format, compressed, dest, expected_name) in [
-        (DatabaseFormat::Quichash, true, "compressed", "compressed.qh.zst"),
-        (DatabaseFormat::Hashdeep, false, "portable", "portable.hashdeep"),
+        (
+            DatabaseFormat::Quichash,
+            true,
+            "compressed",
+            "compressed.qh.zst",
+        ),
+        (
+            DatabaseFormat::Hashdeep,
+            false,
+            "portable",
+            "portable.hashdeep",
+        ),
     ] {
         let actual = create_database(
             &HashCreateOptions {
