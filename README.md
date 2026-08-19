@@ -23,7 +23,7 @@ MacOs, Linux, Windows x64/arm64
 - **Cross-Provider Storage**: Seamless operations between local disks, cloud buckets (S3/Azure/GCS), remote servers (SFTP/FTP), and Kubernetes storage.
 - **Dual-Pane & Tabbed Interface**: Independent dual panes with full **multi-tab support** per pane (`Ctrl+T` new tab, `Ctrl+W` close tab, `[` / `]` cycle tabs, header indicators `[ 1/3 ]`), persistent across sessions, directory difference highlighting (`[DIFF]`), synchronized scrolling (`[SYNC]`), and natural alphanumeric/episode sorting.
 - **Integrated File & Media Inspector**: Real-time audio/media tag inspection (ID3/FLAC/OGG/WAV/MP4), hex/text viewer, and editor integration.
-- **Bookmarks & Fast Navigation**: Persistent bookmarks (`Ctrl+1..9`), fuzzy directory history (`Alt+H`), and Zoxide / Autojump integration (`Alt+J`).
+- **Bookmarks & Fast Navigation**: Persistent bookmarks (`Ctrl+1..9`, `Ctrl+Shift+1..9`), fuzzy directory history (`Ctrl+H`), and Zoxide / Autojump integration (`Ctrl+J`).
 - **Disk Analyze**: `4` launches the embedded cleaner disk-usage analyzer; `Esc`/`q` returns to dual-pane browsing.
 
 ## Workspace

@@ -117,7 +117,7 @@ impl App {
     pub(crate) fn jump_to_bookmark(&mut self, index: usize) {
         let Some(bookmark) = self.workspace.bookmark(index).cloned() else {
             self.set_status(format!(
-                "Bookmark {} is empty; assign it with Ctrl+Alt+{}",
+                "Bookmark {} is empty; assign it with Ctrl+Shift+{}",
                 index + 1,
                 index + 1
             ));

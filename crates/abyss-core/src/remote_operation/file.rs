@@ -15,7 +15,7 @@ use crate::storage::{
     ByteStream, EntryKind, ErrorKind, Location, ReadOptions, RemoteLocation, StorageBackend,
     StorageError, StoragePath, StorageRuntime, WriteOptions,
 };
-pub(crate) async fn copy_file(
+pub async fn copy_file(
     storage: &StorageRuntime,
     source: &Location,
     destination: &Location,

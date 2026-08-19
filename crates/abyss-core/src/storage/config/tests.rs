@@ -59,7 +59,7 @@ fn kubernetes_helper_images_are_ordered_and_backward_compatible() {
     assert!(
         defaults[2]
             .image
-            .starts_with("ghcr.io/vyrti/abyss-kube-helper:")
+            .starts_with("ghcr.io/abyss-rs/abyss-kube-helper:")
     );
 
     connection.helper_image = "legacy.example/helper:v1".to_owned();

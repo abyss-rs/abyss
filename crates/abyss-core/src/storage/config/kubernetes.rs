@@ -38,7 +38,7 @@ const fn default_kubernetes_migration_workers() -> usize {
 #[cfg(feature = "kubernetes")]
 fn default_helper_image() -> String {
     format!(
-        "ghcr.io/vyrti/abyss-kube-helper:{}",
+        "ghcr.io/abyss-rs/abyss-kube-helper:{}",
         env!("CARGO_PKG_VERSION")
     )
 }

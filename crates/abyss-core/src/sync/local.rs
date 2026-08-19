@@ -78,11 +78,10 @@ fn walk(
     plan: &mut SyncPlan,
 ) -> Result<(), String> {
     let directory = source_root.join(relative);
-    let entries = fs::read_dir(&directory)
-        .map_err(|error| format!("read sync source {}: {error}", directory.display()))?;
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("read sync source {}: {error}", directory.display()))?;
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
         let name = entry.file_name();
         if name.as_encoded_bytes().starts_with(b"._") {
             continue;
@@ -90,25 +89,14 @@ fn walk(
         let relative = relative.join(name);
         let source = source_root.join(&relative);
         let destination = destination_root.join(&relative);
-        let source_metadata = fs::symlink_metadata(&source)
-            .map_err(|error| format!("inspect sync source {}: {error}", source.display()))?;
+        let Ok(source_metadata) = fs::symlink_metadata(&source) else {
+            continue;
+        };
         if source_metadata.is_dir() {
             match fs::symlink_metadata(&destination) {
                 Ok(metadata) if metadata.is_dir() => {}
-                Ok(_) => {
-                    return Err(format!(
-                        "sync directory conflicts with a non-directory: {}",
-                        destination.display()
-                    ));
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                _ => {
                     plan.directories.push(Location::Local(destination.clone()));
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "inspect sync destination {}: {error}",
-                        destination.display()
-                    ));
                 }
             }
             walk(
@@ -273,10 +261,8 @@ fn compare_item(
         return Ok(Some(SyncReason::TypeChanged));
     }
     if source_metadata.file_type().is_symlink() {
-        let source_target = fs::read_link(source)
-            .map_err(|error| format!("read link {}: {error}", source.display()))?;
-        let destination_target = fs::read_link(destination)
-            .map_err(|error| format!("read link {}: {error}", destination.display()))?;
+        let source_target = fs::read_link(source).ok();
+        let destination_target = fs::read_link(destination).ok();
         return Ok((source_target != destination_target).then_some(
             if comparison == SyncComparison::Checksum {
                 SyncReason::ChecksumChanged
@@ -286,10 +272,7 @@ fn compare_item(
         ));
     }
     if !source_metadata.is_file() {
-        return Err(format!(
-            "unsupported sync source object: {}",
-            source.display()
-        ));
+        return Ok(None);
     }
     if source_metadata.len() != destination_metadata.len() {
         return Ok(Some(

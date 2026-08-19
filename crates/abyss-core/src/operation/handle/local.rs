@@ -61,6 +61,34 @@ impl OperationHandle {
         }
     }
 
+    pub fn start_sync(storage: Arc<StorageRuntime>, plan: crate::sync::SyncPlan) -> Self {
+        let stats = Arc::new(CopyStats::default());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (event_tx, events) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel();
+        let resolver = ChannelConflictResolver::with_mode(
+            event_tx.clone(),
+            response_rx,
+            Arc::clone(&cancelled),
+            ConflictDecision::Overwrite,
+        );
+        let thread_stats = Arc::clone(&stats);
+        let thread_cancelled = Arc::clone(&cancelled);
+
+        thread::spawn(move || {
+            let result =
+                crate::sync::execute_sync(storage, plan, thread_cancelled, thread_stats, &resolver);
+            let _ = event_tx.send(OperationEvent::Finished(result));
+        });
+
+        Self {
+            stats,
+            cancelled,
+            events,
+            conflict_response: response_tx,
+        }
+    }
+
     pub fn start_sync_file(
         storage: Arc<StorageRuntime>,
         source: Location,

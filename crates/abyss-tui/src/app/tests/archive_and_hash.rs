@@ -215,7 +215,7 @@ fn encrypted_archive_fields_submit_the_background_job_in_place() {
         app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
     }
     assert!(matches!(app.modal, Some(Modal::ArchiveCreate(_))));
-    app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
+    app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
     assert!(app.modal.is_none());
     assert!(app.foreground_job.is_none());
     assert!(app.jobs.history().iter().any(|job| {
@@ -253,6 +253,33 @@ fn archive_creation_b_starts_background_job() {
             .history()
             .iter()
             .any(|job| job.kind == crate::operation::OperationKind::Archive
+                && job.launch == crate::jobs::LaunchMode::Background)
+    );
+}
+
+#[test]
+fn input_dialog_ctrl_b_and_shift_enter_start_background_job() {
+    let temp = TempDir::new();
+    let src = temp.path().join("source.txt");
+    std::fs::write(&src, b"test content").unwrap();
+    let dest = temp.path().join("dest.txt");
+    let mut app = App::new(temp.path().to_owned(), temp.path().to_owned());
+
+    let input = InputDialog::new(
+        "Copy",
+        "Destination:",
+        dest.display().to_string(),
+        InputAction::Copy(vec![src.into()]),
+    );
+    app.modal = Some(Modal::Input(input));
+    app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    assert!(app.modal.is_none());
+    assert!(app.foreground_job.is_none());
+    assert!(
+        app.jobs
+            .history()
+            .iter()
+            .any(|job| job.kind == crate::operation::OperationKind::Copy
                 && job.launch == crate::jobs::LaunchMode::Background)
     );
 }

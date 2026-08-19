@@ -13,6 +13,26 @@ pub struct PaneTabs {
     active: usize,
 }
 
+/// Returns the user's home folder location if available and existing, falling back to current dir or ".".
+pub fn fallback_home_location() -> Location {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .filter(|path| path.exists())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.exists())
+        })
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.exists())
+        })
+        .or_else(|| std::env::current_dir().ok().filter(|p| p.exists()))
+        .map(Location::Local)
+        .unwrap_or_else(|| Location::Local(std::path::PathBuf::from(".")))
+}
+
 impl PaneTabs {
     pub fn new(pane: Pane) -> Self {
         Self {
@@ -30,6 +50,10 @@ impl PaneTabs {
             .iter()
             .filter_map(|tab| {
                 let location = tab.location.parse().ok()?;
+                let location = match &location {
+                    Location::Local(path) if !path.exists() => fallback.clone(),
+                    _ => location,
+                };
                 let mut pane = Pane::new(location);
                 pane.sort = tab.sort;
                 Some(pane)

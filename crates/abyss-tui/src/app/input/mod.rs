@@ -148,6 +148,13 @@ impl App {
                     }
                     self.set_status(format!("Cancelling job #{id}…"));
                 }
+                KeyCode::Char('b') | KeyCode::Char('B') => {
+                    if let Some(job) = self.jobs.job_mut(id) {
+                        job.launch = crate::jobs::LaunchMode::Background;
+                    }
+                    self.foreground_job = None;
+                    self.set_status(format!("Moved job #{id} to background"));
+                }
                 KeyCode::Char('0') | KeyCode::Char('q') => {
                     self.modal = Some(Modal::QuitJobs);
                 }
@@ -173,7 +180,16 @@ impl App {
             return;
         }
 
-        if key.modifiers.contains(KeyModifiers::ALT) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let KeyCode::Char(digit @ '1'..='9') = key.code {
+                let index = digit as usize - '1' as usize;
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.assign_bookmark(index);
+                } else {
+                    self.jump_to_bookmark(index);
+                }
+                return;
+            }
             match key.code {
                 KeyCode::Char('h') => {
                     self.perform_menu_action(MenuAction::DirectoryHistory);
@@ -183,21 +199,6 @@ impl App {
                     self.perform_menu_action(MenuAction::SmartJump);
                     return;
                 }
-                _ => {}
-            }
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let KeyCode::Char(digit @ '1'..='9') = key.code {
-                let index = digit as usize - '1' as usize;
-                if key.modifiers.contains(KeyModifiers::ALT) {
-                    self.assign_bookmark(index);
-                } else {
-                    self.jump_to_bookmark(index);
-                }
-                return;
-            }
-            match key.code {
                 KeyCode::Char('t') => {
                     self.perform_menu_action(MenuAction::NewTab);
                     return;

@@ -16,7 +16,7 @@ use crate::tasks::SnapshotLoad;
 use crate::tasks::{RemoteDownload, SyncLoad};
 use crate::ui;
 use crate::viewer::ViewerMode;
-use crate::workspace::SessionState;
+use crate::workspace::{SessionState, fallback_home_location};
 
 const EVENT_TICK: Duration = Duration::from_millis(60);
 
@@ -373,9 +373,26 @@ impl App {
                 sort,
                 result,
             } => {
+                let is_error = result.is_err();
                 if let Some(target) = self.panes.get_mut(pane) {
                     target.apply_directory(generation, &path, sort, result);
                     target.ensure_visible(self.pane_rows);
+                }
+
+                if is_error {
+                    let fallback = fallback_home_location();
+                    if self.panes.get(pane).is_some_and(|p| p.location != fallback) {
+                        self.set_status(format!(
+                            "Folder '{}' not available, opening home folder",
+                            path.display()
+                        ));
+                        if let Some(target) = self.panes.get_mut(pane) {
+                            target.change_location(pane, fallback, &self.browser);
+                        }
+                        if pane == self.active {
+                            self.record_active_location();
+                        }
+                    }
                 }
             }
             BrowserEvent::Resolved {

@@ -219,7 +219,7 @@ pub(crate) fn render_operation(frame: &mut Frame, area: Rect, job: &Job) {
     );
     let speed = operation_speed_line(job.speed, inside.width as usize);
     frame.render_widget(
-        Paragraph::new(format!("{speed}\nEsc  Cancel")).style(DIALOG),
+        Paragraph::new(format!("{speed}\nEsc  Cancel    B  Background")).style(DIALOG),
         Rect::new(inside.x, inside.y + 7, inside.width, 2),
     );
 }

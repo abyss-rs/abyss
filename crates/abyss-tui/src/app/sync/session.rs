@@ -157,52 +157,28 @@ impl App {
     }
 
     pub(crate) fn execute_sync_plan_session(&mut self, plan: SyncPlan, background: bool) {
-        for directory in &plan.directories {
-            let result = match directory {
-                Location::Local(path) => {
-                    fs::create_dir_all(path).map_err(|error| error.to_string())
-                }
-                Location::Remote(remote) => self
-                    .browser
-                    .storage()
-                    .backend(remote)
-                    .and_then(|backend| {
-                        if backend.capabilities().create_dir {
-                            self.browser
-                                .storage()
-                                .block_on(backend.create_dir(&remote.path))
-                        } else {
-                            Ok(())
-                        }
-                    })
-                    .map_err(|error| error.to_string()),
-            };
-            if let Err(error) = result {
-                self.show_error("Sync", format!("create {}: {error}", directory.display()));
-                return;
-            }
-        }
-        let count = plan.files.len();
+        let count = plan.files.len() + plan.deletions.len();
+        let bytes = plan.bytes;
         let launch_mode = if background {
             LaunchMode::Background
         } else {
             LaunchMode::Foreground
         };
-        for file in plan.files {
-            self.jobs.submit(
-                JobRequest::SyncFile {
-                    storage: self.browser.storage(),
-                    source: file.source,
-                    destination: file.destination,
-                },
-                launch_mode,
-                self.active,
-                None,
-            );
+        let job_id = self.jobs.submit(
+            JobRequest::Sync {
+                storage: self.browser.storage(),
+                plan,
+            },
+            launch_mode,
+            self.active,
+            None,
+        );
+        if !background {
+            self.foreground_job = Some(job_id);
         }
         self.set_status(format!(
-            "Started sync for {count} file(s), {} total",
-            human_bytes(plan.bytes)
+            "Started sync for {count} item(s), {} total",
+            human_bytes(bytes)
         ));
     }
 

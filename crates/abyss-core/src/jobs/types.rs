@@ -53,6 +53,10 @@ pub enum JobRequest {
     Trash {
         sources: Vec<PathBuf>,
     },
+    Sync {
+        storage: Arc<StorageRuntime>,
+        plan: crate::sync::SyncPlan,
+    },
     SyncFile {
         storage: Arc<StorageRuntime>,
         source: Location,
@@ -108,7 +112,7 @@ impl JobRequest {
             Self::Copy { kind, .. } => *kind,
             Self::Delete { .. } => OperationKind::Delete,
             Self::Trash { .. } => OperationKind::Trash,
-            Self::SyncFile { .. } => OperationKind::Sync,
+            Self::Sync { .. } | Self::SyncFile { .. } => OperationKind::Sync,
             Self::CreateArchive { .. } => OperationKind::Archive,
             Self::CreateHash { .. } => OperationKind::Hash,
             Self::VerifyHash { .. } => OperationKind::Verify,
@@ -161,6 +165,16 @@ impl JobRequest {
                     mode: AccessMode::Write,
                 })
                 .collect(),
+            Self::Sync { plan, .. } => vec![
+                PathAccess {
+                    path: plan.source.clone(),
+                    mode: AccessMode::Read,
+                },
+                PathAccess {
+                    path: plan.destination.clone(),
+                    mode: AccessMode::Write,
+                },
+            ],
             Self::SyncFile {
                 source,
                 destination,
@@ -281,6 +295,7 @@ impl JobRequest {
             } => OperationHandle::start_copy(sources, destination, kind),
             Self::Delete { sources } => OperationHandle::start_delete(sources),
             Self::Trash { sources } => OperationHandle::start_trash(sources),
+            Self::Sync { storage, plan } => OperationHandle::start_sync(storage, plan),
             Self::SyncFile {
                 storage,
                 source,

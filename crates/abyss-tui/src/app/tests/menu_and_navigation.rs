@@ -282,6 +282,56 @@ fn sync_mode_opens_on_three_and_leaves_on_escape_or_zero() {
 }
 
 #[test]
+fn sync_session_runs_in_foreground_with_progress_and_background_toggle() {
+    let src = TempDir::new();
+    let dst = TempDir::new();
+    std::fs::write(src.path().join("file.txt"), b"sync me").unwrap();
+    let mut app = App::new(src.path().to_owned(), dst.path().to_owned());
+
+    // Enter Sync mode with '3'
+    app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+    assert!(app.sync.is_some());
+
+    // Set a dummy plan with a file to sync
+    let plan = crate::sync::SyncPlan {
+        source: crate::storage::Location::Local(src.path().to_owned()),
+        destination: crate::storage::Location::Local(dst.path().to_owned()),
+        comparison: SyncComparison::Metadata,
+        strategy: SyncStrategy::Mirror,
+        directories: vec![],
+        files: vec![crate::sync::SyncFile {
+            source: crate::storage::Location::Local(src.path().join("file.txt")),
+            destination: crate::storage::Location::Local(dst.path().join("file.txt")),
+            relative: "file.txt".to_owned(),
+            reason: crate::sync::SyncReason::Missing,
+        }],
+        deletions: vec![],
+        unchanged: 0,
+        bytes: 7,
+    };
+    app.sync.as_mut().unwrap().plan = Some(plan.clone());
+
+    // Run sync in foreground with Enter / 3
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.sync.is_none());
+    assert!(app.foreground_job.is_some());
+
+    let fg_id = app.foreground_job.unwrap();
+    assert_eq!(
+        app.jobs.job(fg_id).unwrap().kind,
+        crate::operation::OperationKind::Sync
+    );
+
+    // Press 'B' to move the foreground sync job to background
+    app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+    assert!(app.foreground_job.is_none());
+    assert_eq!(
+        app.jobs.job(fg_id).unwrap().launch,
+        crate::jobs::LaunchMode::Background
+    );
+}
+
+#[test]
 fn file_commands_are_disabled_while_sources_are_visible() {
     let temp = TempDir::new();
     let mut app = App::new(temp.path().to_owned(), temp.path().to_owned());
@@ -349,7 +399,7 @@ fn history_opens_and_filters_by_subsequence() {
     app.workspace
         .record_history(&Location::Local(PathBuf::from("/usr/local/bin")));
 
-    app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::ALT));
+    app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
     assert!(matches!(app.modal, Some(Modal::History(_))));
     assert!(fuzzy_matches("/var/lib/containers", "vlc"));
     assert!(!fuzzy_matches("/usr/local/bin", "xyz"));
@@ -428,4 +478,45 @@ fn directory_diff_detects_only_here_and_modified() {
         app.entry_difference(0, file2_entry),
         Some(Difference::Modified)
     );
+}
+
+#[test]
+fn ctrl_shift_assigns_and_ctrl_jumps_bookmark() {
+    let dir1 = TempDir::new();
+    let dir2 = TempDir::new();
+    let mut app = App::new(dir1.path().to_owned(), dir2.path().to_owned());
+
+    // Assign bookmark 1 with Ctrl+Shift+1
+    app.handle_key(KeyEvent::new(
+        KeyCode::Char('1'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    assert_eq!(
+        app.workspace.bookmark(0).map(|l| l.display()),
+        Some(dir1.path().display().to_string())
+    );
+
+    // Navigate pane to dir2
+    app.navigate_active_to(Location::Local(dir2.path().to_owned()));
+
+    // Jump back to bookmark 1 with Ctrl+1
+    app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL));
+    assert_eq!(
+        app.panes[0].location.display(),
+        dir1.path().display().to_string()
+    );
+}
+
+#[test]
+fn nonexistent_directory_falls_back_to_home_on_startup_and_error() {
+    let non_existent = PathBuf::from("/path/that/does/not/exist/at/all_12345");
+    let fallback = crate::workspace::fallback_home_location();
+
+    let app = App::from_workspace(
+        Some(Location::Local(non_existent.clone())),
+        None,
+        crate::workspace::WorkspaceState::default(),
+        None,
+    );
+    assert_eq!(app.panes[0].location, fallback);
 }

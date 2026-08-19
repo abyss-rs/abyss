@@ -38,7 +38,7 @@ pub(crate) fn render_input_dialog(
     let buttons = if input.supports_background() {
         vec![
             (DialogButton::Start, "[ Enter  Start ]"),
-            (DialogButton::Background, "[ Alt+B  Background ]"),
+            (DialogButton::Background, "[ Ctrl+B  Background ]"),
             (DialogButton::Cancel, "[ Esc  Cancel ]"),
         ]
     } else {

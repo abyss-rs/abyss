@@ -129,8 +129,8 @@ impl MenuAction {
 
     pub(crate) fn shortcut(self) -> &'static str {
         match self {
-            Self::DirectoryHistory => "⌥H",
-            Self::SmartJump => "⌥J",
+            Self::DirectoryHistory => "⌃H",
+            Self::SmartJump => "⌃J",
             Self::NewTab => "⌃T",
             Self::CloseTab => "⌃W",
             Self::SynchronizedScrolling => "⌃L",

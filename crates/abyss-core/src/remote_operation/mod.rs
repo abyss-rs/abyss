@@ -8,3 +8,4 @@ mod locations;
 mod tests;
 
 pub use self::entry::{delete, transfer};
+pub use self::file::copy_file;

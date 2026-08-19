@@ -49,3 +49,15 @@ impl std::error::Error for Error {
         }
     }
 }
+
+impl From<crate::storage::StorageError> for Error {
+    fn from(error: crate::storage::StorageError) -> Self {
+        Self::Message(error.to_string())
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(error: std::io::Error) -> Self {
+        Self::Message(error.to_string())
+    }
+}

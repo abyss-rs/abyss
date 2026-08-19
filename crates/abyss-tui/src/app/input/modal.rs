@@ -49,7 +49,7 @@ impl App {
                     self.modal = Some(Modal::ArchiveCreate(dialog));
                 }
                 KeyCode::Char('b') | KeyCode::Char('B')
-                    if key.modifiers.contains(KeyModifiers::ALT)
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
                         || !dialog.text_field_focused() =>
                 {
                     self.confirm_archive_create(dialog, LaunchMode::Background);
@@ -117,7 +117,7 @@ impl App {
                     self.modal = Some(Modal::HashCreate(dialog));
                 }
                 KeyCode::Char('b') | KeyCode::Char('B')
-                    if key.modifiers.contains(KeyModifiers::ALT)
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
                         || !dialog.text_field_focused() =>
                 {
                     self.confirm_hash_create(dialog, LaunchMode::Background);
@@ -272,9 +272,9 @@ impl App {
                         }
                     }
                     KeyCode::Char(character)
-                        if !key.modifiers.intersects(
-                            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                        ) =>
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
                     {
                         history.insert(character);
                         self.modal = Some(Modal::History(history));
@@ -345,8 +345,10 @@ impl App {
             },
             Modal::Input(mut input) => {
                 if input.supports_background()
-                    && key.modifiers.contains(KeyModifiers::ALT)
-                    && key.code == KeyCode::Char('b')
+                    && ((key.modifiers.contains(KeyModifiers::CONTROL)
+                        && (key.code == KeyCode::Char('b') || key.code == KeyCode::Char('B')))
+                        || (key.modifiers.contains(KeyModifiers::SHIFT)
+                            && key.code == KeyCode::Enter))
                 {
                     self.submit_input(input, LaunchMode::Background);
                     return;

@@ -9,4 +9,4 @@ mod tests;
 
 pub use self::jump::{best_visit, query_smart_jump, query_smart_jump_in};
 pub use self::state::*;
-pub use self::tabs::PaneTabs;
+pub use self::tabs::{PaneTabs, fallback_home_location};

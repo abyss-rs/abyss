@@ -24,7 +24,7 @@ use crate::tasks::SnapshotLoad;
 use crate::tasks::{RemoteDownload, SyncLoad};
 use crate::ui::LayoutInfo;
 use crate::viewer::{Viewer, ViewerLoad};
-use crate::workspace::{PaneTabs, WorkspaceState};
+use crate::workspace::{PaneTabs, WorkspaceState, fallback_home_location};
 
 #[derive(Clone)]
 pub(crate) struct PendingResolve {
@@ -139,19 +139,25 @@ impl App {
         mut workspace: WorkspaceState,
         warning: Option<String>,
     ) -> Self {
-        let current = std::env::current_dir()
-            .map(Location::Local)
-            .unwrap_or_else(|_| Location::Local(PathBuf::from(".")));
+        let fallback = fallback_home_location();
         let restored = workspace.session.as_ref();
         let mut panes = [
-            PaneTabs::from_session(restored.map(|session| &session.panes[0]), current.clone()),
-            PaneTabs::from_session(restored.map(|session| &session.panes[1]), current.clone()),
+            PaneTabs::from_session(restored.map(|session| &session.panes[0]), fallback.clone()),
+            PaneTabs::from_session(restored.map(|session| &session.panes[1]), fallback.clone()),
         ];
         if let Some(left) = left {
-            panes[0] = PaneTabs::new(Pane::new(left));
+            let left_loc = match &left {
+                Location::Local(path) if !path.exists() => fallback.clone(),
+                _ => left,
+            };
+            panes[0] = PaneTabs::new(Pane::new(left_loc));
         }
         if let Some(right) = right {
-            panes[1] = PaneTabs::new(Pane::new(right));
+            let right_loc = match &right {
+                Location::Local(path) if !path.exists() => fallback.clone(),
+                _ => right,
+            };
+            panes[1] = PaneTabs::new(Pane::new(right_loc));
         }
         let active = restored.map_or(0, |session| session.active_pane.min(1));
         let synchronized = restored.is_some_and(|session| session.synchronized_scrolling);
